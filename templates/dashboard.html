@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - 族谱管理系统{% endblock %}
+{% block content %}
+<section class="section-head">
+    <div>
+        <h1>Dashboard</h1>
+        <p>只显示你创建或受邀参与的族谱。</p>
+    </div>
+</section>
+
+<section class="panel">
+    <h2>创建族谱</h2>
+    <form method="post" action="{{ url_for('create_genealogy') }}" class="grid-form">
+        <label>谱名<input name="name" required placeholder="张氏族谱"></label>
+        <label>姓氏<input name="surname" required placeholder="张"></label>
+        <label>修谱时间<input name="revision_time" type="date" required></label>
+        <button type="submit">创建</button>
+    </form>
+</section>
+
+<section class="list">
+    {% for item in stats %}
+        {% set total = item.total or 0 %}
+        {% set male_ratio = ((item.male or 0) * 100 / total) if total else 0 %}
+        {% set female_ratio = ((item.female or 0) * 100 / total) if total else 0 %}
+        <article class="record">
+            <div>
+                <h2><a href="{{ url_for('genealogy_detail', genealogy_id=item.genealogy.id) }}">{{ item.genealogy.name }}</a></h2>
+                <p>{{ item.genealogy.surname }}氏 · 修谱时间 {{ item.genealogy.revision_time }} · 创建者 {{ item.genealogy.creator_name }}</p>
+            </div>
+            <dl class="metrics">
+                <div><dt>总人数</dt><dd>{{ total }}</dd></div>
+                <div><dt>男性</dt><dd>{{ "%.1f"|format(male_ratio) }}%</dd></div>
+                <div><dt>女性</dt><dd>{{ "%.1f"|format(female_ratio) }}%</dd></div>
+            </dl>
+        </article>
+    {% else %}
+        <p class="empty">还没有可访问的族谱。</p>
+    {% endfor %}
+</section>
+{% endblock %}

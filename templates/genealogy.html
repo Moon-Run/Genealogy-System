@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}{{ genealogy.name }} - 族谱管理系统{% endblock %}
+{% block content %}
+<section class="section-head">
+    <div>
+        <h1>{{ genealogy.name }}</h1>
+        <p>{{ genealogy.surname }}氏 · 修谱时间 {{ genealogy.revision_time }} · 当前收录 {{ total }} 人</p>
+    </div>
+    <a class="button" href="{{ url_for('queries', genealogy_id=genealogy.id) }}">查询中心</a>
+</section>
+
+<section class="panel">
+    <h2>邀请协作者</h2>
+    <form method="post" action="{{ url_for('invite_user', genealogy_id=genealogy.id) }}" class="inline-form">
+        <input name="username" required placeholder="输入用户名">
+        <button type="submit">邀请</button>
+    </form>
+</section>
+
+<section class="panel">
+    <h2>添加成员</h2>
+    <form method="post" action="{{ url_for('create_member', genealogy_id=genealogy.id) }}" class="grid-form">
+        <label>姓名<input name="name" required></label>
+        <label>性别
+            <select name="gender">
+                <option value="M">男</option>
+                <option value="F">女</option>
+                <option value="U">未知</option>
+            </select>
+        </label>
+        <label>出生年<input name="birth_year" type="number" min="1" max="9999"></label>
+        <label>卒年<input name="death_year" type="number" min="1" max="9999"></label>
+        <label>世代<input name="generation" type="number" min="1" value="1"></label>
+        <label class="wide">生平简介<textarea name="biography" rows="2"></textarea></label>
+        <button type="submit">添加</button>
+    </form>
+</section>
+
+<section class="split">
+    <div class="panel">
+        <h2>成员查找</h2>
+        <form method="get" class="inline-form">
+            <input name="q" value="{{ keyword }}" placeholder="姓名模糊查找">
+            <button type="submit">搜索</button>
+        </form>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>ID</th><th>姓名</th><th>性别</th><th>生卒年</th><th>世代</th><th></th></tr></thead>
+                <tbody>
+                    {% for member in members %}
+                        <tr>
+                            <td>{{ member.id }}</td>
+                            <td>{{ member.name }}</td>
+                            <td>{{ {"M":"男","F":"女","U":"未知"}[member.gender] }}</td>
+                            <td>{{ member.birth_year or "?" }} - {{ member.death_year or "" }}</td>
+                            <td>{{ member.generation }}</td>
+                            <td><a href="{{ url_for('member_detail', genealogy_id=genealogy.id, member_id=member.id) }}">编辑</a></td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="6">暂无成员。</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <div class="panel">
+        <h2>树形预览</h2>
+        <form method="get" class="inline-form">
+            <input name="root_id" type="number" placeholder="根成员ID">
+            <button type="submit">查看分支</button>
+        </form>
+        <div class="tree">
+            {% for node in tree %}
+                <div class="tree-row" style="padding-left: {{ node.indent }}px">
+                    <a href="{{ url_for('member_detail', genealogy_id=genealogy.id, member_id=node.member.id) }}">
+                        #{{ node.member.id }} {{ node.member.name }}
+                    </a>
+                    <span>第 {{ node.member.generation }} 代</span>
+                </div>
+            {% else %}
+                <p class="empty">暂无可预览的成员。</p>
+            {% endfor %}
+        </div>
+        {% if tree %}
+            <a class="button secondary" href="{{ url_for('export_branch', genealogy_id=genealogy.id, root_id=tree[0].member.id) }}">导出当前分支 CSV</a>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

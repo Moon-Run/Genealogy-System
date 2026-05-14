@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{{ "注册" if mode == "register" else "登录" }} - 族谱管理系统{% endblock %}
+{% block content %}
+<section class="auth-panel">
+    <h1>{{ "用户注册" if mode == "register" else "用户登录" }}</h1>
+    <form method="post" class="form">
+        <label>
+            用户名
+            <input name="username" required autocomplete="username">
+        </label>
+        <label>
+            密码
+            <input name="password" type="password" required autocomplete="{{ 'new-password' if mode == 'register' else 'current-password' }}">
+        </label>
+        <button type="submit">{{ "注册" if mode == "register" else "登录" }}</button>
+    </form>
+    {% if mode == "register" %}
+        <p>已有账号？<a href="{{ url_for('login') }}">去登录</a></p>
+    {% else %}
+        <p>没有账号？<a href="{{ url_for('register') }}">注册一个</a></p>
+        <p class="muted">演示账号：admin / admin123，可先运行 <code>flask --app app seed-demo</code> 创建。</p>
+    {% endif %}
+</section>
+{% endblock %}

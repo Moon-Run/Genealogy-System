@@ -279,6 +279,28 @@ button:hover,
     font-weight: 700;
 }
 
+.dashboard-toolbar {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: end;
+}
+
+.dashboard-toolbar h2 {
+    margin-bottom: 4px;
+}
+
+.dashboard-toolbar p {
+    margin-bottom: 0;
+}
+
+.sort-form {
+    display: grid;
+    grid-template-columns: minmax(180px, 220px) auto;
+    gap: 10px;
+    align-items: end;
+}
+
 .split {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -286,20 +308,130 @@ button:hover,
     align-items: start;
 }
 
+.query-page {
+    display: flex;
+    flex-direction: column;
+}
+
+.query-head {
+    order: 1;
+}
+
+.query-samples {
+    order: 3;
+}
+
+.query-layout {
+    order: 4;
+}
+
+.result-panel {
+    order: 2;
+}
+
+.query-layout {
+    display: grid;
+    gap: 22px;
+}
+
+.query-group {
+    display: grid;
+    gap: 12px;
+}
+
+.query-group-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 30px;
+    border-bottom: 1px solid var(--line);
+}
+
+.query-group-head h2 {
+    margin: 0;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--primary);
+}
+
 .query-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 18px;
+    gap: 14px;
     align-items: stretch;
 }
 
+.compact-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.relation-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.stats-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .query-card {
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
     margin-bottom: 0;
+    padding: 16px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
 .query-card h2 {
-    min-height: 44px;
+    min-height: 0;
+    margin-bottom: 12px;
+    font-size: 16px;
+}
+
+.query-card .form {
+    height: 100%;
+}
+
+.query-card button {
+    margin-top: auto;
+    width: 100%;
+}
+
+.query-card:hover {
+    border-color: #b9c7dc;
+    box-shadow: 0 6px 20px rgb(16 24 40 / 0.07);
+    transform: translateY(-1px);
+}
+
+.query-card.is-active {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px #dbeafe;
+}
+
+.relation-card {
+    grid-column: span 2;
+    border-left: 4px solid var(--accent);
+}
+
+.relation-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.relation-form input[type="hidden"],
+.relation-form button {
+    grid-column: 1 / -1;
+}
+
+.query-samples {
+    padding-bottom: 14px;
+}
+
+.panel-title-row.compact {
+    align-items: center;
     margin-bottom: 10px;
+}
+
+.panel-title-row.compact h2 {
+    margin: 0;
 }
 
 .sample-strip {
@@ -321,6 +453,32 @@ button:hover,
 
 .result-panel {
     margin-top: 18px;
+    border-color: #c8d7ea;
+}
+
+.result-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 14px;
+}
+
+.result-head h2 {
+    margin: 0;
+}
+
+.result-head span {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    border: 1px solid #b9dfd7;
+    border-radius: 999px;
+    padding: 3px 10px;
+    background: var(--accent-soft);
+    color: #0f5f59;
+    font-size: 13px;
+    white-space: nowrap;
 }
 
 .result-columns {
@@ -558,7 +716,8 @@ code {
 @media (max-width: 820px) {
     .topbar,
     .section-head,
-    .record {
+    .record,
+    .dashboard-toolbar {
         align-items: flex-start;
         flex-direction: column;
     }
@@ -567,15 +726,35 @@ code {
     .inline-form,
     .split,
     .query-grid,
+    .compact-grid,
+    .relation-grid,
+    .stats-grid,
+    .relation-form,
     .result-columns,
     .panel-title-row {
         grid-template-columns: 1fr;
         flex-direction: column;
     }
 
+    .relation-card,
+    .relation-form input[type="hidden"],
+    .relation-form button {
+        grid-column: auto;
+    }
+
+    .result-head {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
     .metrics {
         width: 100%;
         flex-wrap: wrap;
+    }
+
+    .sort-form {
+        width: 100%;
+        grid-template-columns: 1fr;
     }
 
     .person-card {

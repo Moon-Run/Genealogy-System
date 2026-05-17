@@ -18,7 +18,7 @@ python scripts/generate_data.py --out data/generated --large-size 50000 --total-
 | `parent_child_relations.csv` | `parent_child_relations` |
 | `marriages.csv` | `marriages` |
 
-脚本为每个族谱生成 30 代传承；第 2 代开始，每个成员至少拥有父母关系，因此族谱内成员满足亲缘连接要求。
+脚本会让第一个族谱拥有 `--large-size` 指定的人数，默认 50,000；其余 9 个族谱在剩余人数中随机分配。脚本为每个族谱生成 30 代传承；第 2 代开始，每个成员至少拥有父母关系，因此族谱内成员满足亲缘连接要求。
 
 ## 2. SQLite 导入
 
@@ -61,7 +61,7 @@ SELECT id, member1_id, member2_id,
 FROM marriages_stage;
 ```
 
-注意：`users.csv` 中的密码 hash 是占位值。若要用 Web 登录，请通过系统注册用户，或使用 `flask --app app seed-demo` 创建演示账号。
+注意：`users.csv` 中只有 `admin` 用户写入了 `admin123` 对应的有效密码 hash。导入后可直接使用 `admin / admin123` 登录；`user2` 到 `user11` 仍保留占位密码 hash。
 
 ## 3. MySQL LOAD DATA 示例
 

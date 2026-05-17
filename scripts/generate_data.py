@@ -2,12 +2,21 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import secrets
 import random
 from pathlib import Path
+
+try:
+    from werkzeug.security import generate_password_hash as werkzeug_generate_password_hash
+except ModuleNotFoundError:
+    werkzeug_generate_password_hash = None
 
 SURNAMES = ["赵", "钱", "孙", "李", "周", "吴", "郑", "王", "冯", "陈"]
 MALE_NAMES = ["明", "强", "磊", "军", "洋", "勇", "杰", "涛", "超", "峰", "睿", "航"]
 FEMALE_NAMES = ["芳", "娜", "敏", "静", "丽", "艳", "雅", "雪", "婷", "宁", "欣", "然"]
+ADMIN_PASSWORD = "admin123"
+SALT_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
 
 def main() -> None:
@@ -35,19 +44,40 @@ def build_sizes(large_size: int, total_size: int) -> list[int]:
     if total_size < 100000:
         raise ValueError("--total-size 至少为 100000")
     remaining = total_size - large_size
-    base = remaining // 9
-    sizes = [large_size] + [base] * 9
-    sizes[-1] += remaining - base * 9
-    return sizes
+    min_branch_size = 60
+    min_remaining = min_branch_size * 9
+    if remaining < min_remaining:
+        raise ValueError(f"--total-size 至少需要比 --large-size 多 {min_remaining}，保证其余 9 个族谱都能生成 30 代")
+
+    extra = remaining - min_remaining
+    cuts = sorted(random.sample(range(extra + 9), 8))
+    last = -1
+    random_sizes = []
+    for cut in cuts + [extra + 8]:
+        random_sizes.append(cut - last - 1)
+        last = cut
+
+    return [large_size] + [min_branch_size + size for size in random_sizes]
 
 
 def write_users(out_dir: Path) -> None:
+    admin_password_hash = make_password_hash(ADMIN_PASSWORD)
     with (out_dir / "users.csv").open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["id", "username", "password_hash"])
-        writer.writerow([1, "admin", "pbkdf2:sha256:placeholder"])
+        writer.writerow([1, "admin", admin_password_hash])
         for i in range(2, 12):
             writer.writerow([i, f"user{i}", "pbkdf2:sha256:placeholder"])
+
+
+def make_password_hash(password: str) -> str:
+    if werkzeug_generate_password_hash is not None:
+        return werkzeug_generate_password_hash(password)
+
+    method = "pbkdf2:sha256:600000"
+    salt = "".join(secrets.choice(SALT_CHARS) for _ in range(16))
+    hash_value = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 600000).hex()
+    return f"{method}${salt}${hash_value}"
 
 
 def write_genealogies(out_dir: Path, sizes: list[int]) -> list[dict[str, int | str]]:
@@ -58,7 +88,7 @@ def write_genealogies(out_dir: Path, sizes: list[int]) -> list[dict[str, int | s
         for i, surname in enumerate(SURNAMES, start=1):
             row = {
                 "id": i,
-                "name": f"{surname}氏模拟族谱",
+                "name": f"{surname}氏族谱",
                 "surname": surname,
                 "revision_time": "2026-05-14",
                 "creator_user_id": 1 + (i % 10),

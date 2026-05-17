@@ -4,8 +4,25 @@
 <section class="section-head">
     <div>
         <h1>Dashboard</h1>
-        <p>只显示你创建或受邀参与的族谱。</p>
+        <p>{% if is_admin %}管理员视图显示全部族谱。{% else %}只显示你创建或受邀参与的族谱。{% endif %}</p>
     </div>
+</section>
+
+<section class="panel dashboard-toolbar">
+    <div>
+        <h2>族谱列表</h2>
+        <p class="muted">当前共显示 {{ stats|length }} 个族谱。</p>
+    </div>
+    <form method="get" class="sort-form">
+        <label>人数排序
+            <select name="sort" onchange="this.form.submit()">
+                <option value="members_desc" {% if sort == "members_desc" %}selected{% endif %}>人数从多到少</option>
+                <option value="members_asc" {% if sort == "members_asc" %}selected{% endif %}>人数从少到多</option>
+                <option value="created_desc" {% if sort == "created_desc" %}selected{% endif %}>最近创建优先</option>
+            </select>
+        </label>
+        <button type="submit">应用</button>
+    </form>
 </section>
 
 <section class="panel">

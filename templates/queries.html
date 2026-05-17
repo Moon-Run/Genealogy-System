@@ -5,15 +5,19 @@
     <a href="{{ url_for('member_detail', genealogy_id=genealogy.id, member_id=item.id) }}">#{{ item.id }} {{ item.name|display_name }}</a>
 {%- endmacro %}
 
-<section class="section-head">
+<div class="query-page">
+<section class="section-head query-head">
     <div>
         <h1>查询中心</h1>
         <p><a href="{{ url_for('genealogy_detail', genealogy_id=genealogy.id) }}">{{ genealogy.name }}</a> · 大族谱查询已改为按 ID 精确输入，避免一次性加载全部成员。</p>
     </div>
 </section>
 
-<section class="panel">
-    <h2>常用成员 ID</h2>
+<section class="panel query-samples">
+    <div class="panel-title-row compact">
+        <h2>常用成员 ID</h2>
+        <a class="button secondary" href="{{ url_for('genealogy_detail', genealogy_id=genealogy.id) }}">返回族谱</a>
+    </div>
     <div class="sample-strip">
         {% for item in query_samples %}
             <a href="{{ url_for('member_detail', genealogy_id=genealogy.id, member_id=item.id) }}">#{{ item.id }} {{ item.name|display_name }} · 第{{ item.generation }}代</a>
@@ -23,105 +27,143 @@
     </div>
 </section>
 
-<section class="query-grid">
-    <div class="panel query-card">
-        <h2>姓名查 ID</h2>
-        <form method="post" class="form">
-            <input type="hidden" name="query_type" value="name_lookup">
-            <label>姓名关键词<input name="name" required placeholder="如 陈艳"></label>
-            <button type="submit">查询成员 ID</button>
-        </form>
+<section class="query-layout">
+    <div class="query-group">
+        <div class="query-group-head">
+            <h2>成员定位</h2>
+        </div>
+        <div class="query-grid compact-grid">
+            <div class="panel query-card {% if query_type == 'name_lookup' %}is-active{% endif %}">
+                <h2>姓名查 ID</h2>
+                <form method="post" class="form">
+                    <input type="hidden" name="query_type" value="name_lookup">
+                    <label>姓名关键词<input name="name" required placeholder="如 陈艳"></label>
+                    <button type="submit">查询成员 ID</button>
+                </form>
+            </div>
+            <div class="panel query-card {% if query_type == 'family' %}is-active{% endif %}">
+                <h2>配偶及子女</h2>
+                <form method="post" class="form">
+                    <input type="hidden" name="query_type" value="family">
+                    <label>成员 ID<input name="member_id" type="number" min="1" required></label>
+                    <button type="submit">查询家庭</button>
+                </form>
+            </div>
+        </div>
     </div>
-    <div class="panel query-card">
-        <h2>祖先查询</h2>
-        <form method="post" class="form">
-            <input type="hidden" name="query_type" value="ancestors">
-            <label>成员 ID<input name="member_id" type="number" min="1" required placeholder="如 94441"></label>
-            <button type="submit">查询历代祖先</button>
-        </form>
+
+    <div class="query-group">
+        <div class="query-group-head">
+            <h2>关系链路</h2>
+        </div>
+        <div class="query-grid relation-grid">
+            <div class="panel query-card relation-card {% if query_type == 'kinship' %}is-active{% endif %}">
+                <h2>人物亲缘关系查询</h2>
+                <form method="post" class="form relation-form">
+                    <input type="hidden" name="query_type" value="kinship">
+                    <label>成员 A ID<input name="member_a_id" type="number" min="1" required></label>
+                    <label>成员 B ID<input name="member_b_id" type="number" min="1" required></label>
+                    <label>最大搜索深度<input name="max_depth" type="number" min="1" max="30" value="20"></label>
+                    <label class="check-row">
+                        <input name="include_marriage" type="checkbox" value="1" {% if query_type == "kinship" and result and result.include_marriage %}checked{% endif %}>
+                        包含婚姻关系
+                    </label>
+                    <button type="submit">查询最短链路</button>
+                </form>
+            </div>
+            <div class="panel query-card {% if query_type == 'ancestors' %}is-active{% endif %}">
+                <h2>祖先查询</h2>
+                <form method="post" class="form">
+                    <input type="hidden" name="query_type" value="ancestors">
+                    <label>成员 ID<input name="member_id" type="number" min="1" required placeholder="如 94441"></label>
+                    <button type="submit">查询历代祖先</button>
+                </form>
+            </div>
+            <div class="panel query-card {% if query_type == 'descendants' %}is-active{% endif %}">
+                <h2>直系后代</h2>
+                <form method="post" class="form">
+                    <input type="hidden" name="query_type" value="descendants">
+                    <label>祖先 ID<input name="member_id" type="number" min="1" required></label>
+                    <label>显示上限<input name="limit" type="number" min="1" max="1000" value="200"></label>
+                    <button type="submit">DFS 查询后代</button>
+                </form>
+            </div>
+            <div class="panel query-card {% if query_type == 'great_grandchildren' %}is-active{% endif %}">
+                <h2>曾孙查询</h2>
+                <form method="post" class="form">
+                    <input type="hidden" name="query_type" value="great_grandchildren">
+                    <label>曾祖父/母 ID<input name="member_id" type="number" min="1" required></label>
+                    <button type="submit">查询四代曾孙</button>
+                </form>
+            </div>
+            <div class="panel query-card {% if query_type == 'common_ancestor' %}is-active{% endif %}">
+                <h2>共同祖先</h2>
+                <form method="post" class="form">
+                    <input type="hidden" name="query_type" value="common_ancestor">
+                    <label>成员 A ID<input name="member_a_id" type="number" min="1" required></label>
+                    <label>成员 B ID<input name="member_b_id" type="number" min="1" required></label>
+                    <button type="submit">寻找最近共同祖先</button>
+                </form>
+            </div>
+        </div>
     </div>
-    <div class="panel query-card">
-        <h2>人物亲缘关系查询</h2>
-        <form method="post" class="form">
-            <input type="hidden" name="query_type" value="kinship">
-            <label>成员 A ID<input name="member_a_id" type="number" min="1" required></label>
-            <label>成员 B ID<input name="member_b_id" type="number" min="1" required></label>
-            <label>最大搜索深度<input name="max_depth" type="number" min="1" max="30" value="20"></label>
-            <label class="check-row">
-                <input name="include_marriage" type="checkbox" value="1" {% if query_type == "kinship" and result and result.include_marriage %}checked{% endif %}>
-                包含婚姻关系
-            </label>
-            <button type="submit">查询最短链路</button>
-        </form>
-    </div>
-    <div class="panel query-card">
-        <h2>配偶及子女</h2>
-        <form method="post" class="form">
-            <input type="hidden" name="query_type" value="family">
-            <label>成员 ID<input name="member_id" type="number" min="1" required></label>
-            <button type="submit">查询家庭</button>
-        </form>
-    </div>
-    <div class="panel query-card">
-        <h2>直系后代</h2>
-        <form method="post" class="form">
-            <input type="hidden" name="query_type" value="descendants">
-            <label>祖先 ID<input name="member_id" type="number" min="1" required></label>
-            <label>显示上限<input name="limit" type="number" min="1" max="1000" value="200"></label>
-            <button type="submit">DFS 查询后代</button>
-        </form>
-    </div>
-    <div class="panel query-card">
-        <h2>曾孙查询</h2>
-        <form method="post" class="form">
-            <input type="hidden" name="query_type" value="great_grandchildren">
-            <label>曾祖父/母 ID<input name="member_id" type="number" min="1" required></label>
-            <button type="submit">查询四代曾孙</button>
-        </form>
-    </div>
-    <div class="panel query-card">
-        <h2>共同祖先</h2>
-        <form method="post" class="form">
-            <input type="hidden" name="query_type" value="common_ancestor">
-            <label>成员 A ID<input name="member_a_id" type="number" min="1" required></label>
-            <label>成员 B ID<input name="member_b_id" type="number" min="1" required></label>
-            <button type="submit">寻找最近共同祖先</button>
-        </form>
-    </div>
-    <div class="panel query-card">
-        <h2>平均寿命最长世代</h2>
-        <form method="post" class="form">
-            <input type="hidden" name="query_type" value="generation_lifespan">
-            <button type="submit">运行统计</button>
-        </form>
-    </div>
-    <div class="panel query-card">
-        <h2>高龄无配偶男性</h2>
-        <form method="post" class="form">
-            <input type="hidden" name="query_type" value="unmarried_males">
-            <label>年龄大于<input name="age" type="number" min="1" max="150" value="50"></label>
-            <button type="submit">筛选成员</button>
-        </form>
-    </div>
-    <div class="panel query-card">
-        <h2>早于同代均值</h2>
-        <form method="post" class="form">
-            <input type="hidden" name="query_type" value="early_birth">
-            <button type="submit">查询成员</button>
-        </form>
-    </div>
-    <div class="panel query-card">
-        <h2>世代画像</h2>
-        <form method="post" class="form">
-            <input type="hidden" name="query_type" value="generation_profile">
-            <button type="submit">生成画像</button>
-        </form>
+
+    <div class="query-group">
+        <div class="query-group-head">
+            <h2>统计分析</h2>
+        </div>
+        <div class="query-grid stats-grid">
+            <div class="panel query-card {% if query_type == 'generation_lifespan' %}is-active{% endif %}">
+                <h2>平均寿命最长世代</h2>
+                <form method="post" class="form">
+                    <input type="hidden" name="query_type" value="generation_lifespan">
+                    <button type="submit">运行统计</button>
+                </form>
+            </div>
+            <div class="panel query-card {% if query_type == 'unmarried_males' %}is-active{% endif %}">
+                <h2>高龄无配偶男性</h2>
+                <form method="post" class="form">
+                    <input type="hidden" name="query_type" value="unmarried_males">
+                    <label>年龄大于<input name="age" type="number" min="1" max="150" value="50"></label>
+                    <button type="submit">筛选成员</button>
+                </form>
+            </div>
+            <div class="panel query-card {% if query_type == 'early_birth' %}is-active{% endif %}">
+                <h2>早于同代均值</h2>
+                <form method="post" class="form">
+                    <input type="hidden" name="query_type" value="early_birth">
+                    <button type="submit">查询成员</button>
+                </form>
+            </div>
+            <div class="panel query-card {% if query_type == 'generation_profile' %}is-active{% endif %}">
+                <h2>世代画像</h2>
+                <form method="post" class="form">
+                    <input type="hidden" name="query_type" value="generation_profile">
+                    <button type="submit">生成画像</button>
+                </form>
+            </div>
+        </div>
     </div>
 </section>
 
 {% if result is not none %}
 <section class="panel result-panel">
-    <h2>查询结果</h2>
+    <div class="result-head">
+        <h2>查询结果</h2>
+        <span>{{ {
+            "name_lookup": "姓名查 ID",
+            "ancestors": "祖先查询",
+            "kinship": "人物亲缘关系查询",
+            "family": "配偶及子女",
+            "descendants": "直系后代",
+            "great_grandchildren": "曾孙查询",
+            "generation_lifespan": "平均寿命最长世代",
+            "unmarried_males": "高龄无配偶男性",
+            "early_birth": "早于同代均值",
+            "common_ancestor": "共同祖先",
+            "generation_profile": "世代画像"
+        }[query_type] }}</span>
+    </div>
     {% if query_type == "ancestors" %}
         <p class="muted">目标成员：{{ member_link(result.member) }}</p>
         {% if result.truncated %}
@@ -287,4 +329,5 @@
     {% endif %}
 </section>
 {% endif %}
+</div>
 {% endblock %}

@@ -22,7 +22,15 @@ pip install -r requirements.txt
 
 ```bash
 flask --app app init-db
-flask --app app seed-demo
+
+ 写入演示数据(或者如下)
+flask --app app seed-demo  
+
+ 生成CSV数据
+python scripts/generate_data.py --out data/generated --large-size 50000 --total-size 100000
+ 导入CSV数据
+sqlite3 genealogy.db < scripts/import_sqlite.sql
+
 ```
 
 启动系统：
@@ -58,7 +66,7 @@ static/style.css          页面样式
 
 ## 大数据模拟
 
-生成 10 个族谱、总成员 100000 人、一个族谱 50000 人以上：
+生成 10 个族谱、总成员 100000 人、一个族谱 50000 人以上，其余族谱人数随机分配：
 
 ```bash
 python scripts/generate_data.py --out data/generated --large-size 50000 --total-size 100000

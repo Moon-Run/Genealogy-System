@@ -9,6 +9,11 @@ from collections import defaultdict, deque
 from typing import Any
 
 TREE_PREVIEW_LIMIT = 200
+DASHBOARD_SORTS = {
+    "members_desc": "total DESC, g.id ASC",
+    "members_asc": "total ASC, g.id ASC",
+    "created_desc": "g.created_at DESC, g.id DESC",
+}
 
 from flask import (
     Flask,
@@ -100,27 +105,11 @@ def create_app() -> Flask:
     @app.route("/dashboard")
     @login_required
     def dashboard():
-        genealogies = accessible_genealogies()
-        stats = []
-        for genealogy in genealogies:
-            stats.append(
-                {
-                    "genealogy": genealogy,
-                    "total": query_value(
-                        "SELECT COUNT(*) FROM members WHERE genealogy_id = ?",
-                        (genealogy["id"],),
-                    ),
-                    "male": query_value(
-                        "SELECT COUNT(*) FROM members WHERE genealogy_id = ? AND gender = 'M'",
-                        (genealogy["id"],),
-                    ),
-                    "female": query_value(
-                        "SELECT COUNT(*) FROM members WHERE genealogy_id = ? AND gender = 'F'",
-                        (genealogy["id"],),
-                    ),
-                }
-            )
-        return render_template("dashboard.html", stats=stats)
+        sort = request.args.get("sort", "members_desc")
+        if sort not in DASHBOARD_SORTS:
+            sort = "members_desc"
+        stats = dashboard_stats(sort)
+        return render_template("dashboard.html", stats=stats, sort=sort, is_admin=is_admin_user())
 
     @app.route("/genealogies/create", methods=("POST",))
     @login_required
@@ -650,7 +639,58 @@ def search_members(genealogy_id: int, keyword: str, limit: int = 200, offset: in
     )
 
 
+def is_admin_user() -> bool:
+    return bool(g.user and g.user["username"] == "admin")
+
+
+def dashboard_stats(sort: str) -> list[dict[str, Any]]:
+    order_by = DASHBOARD_SORTS.get(sort, DASHBOARD_SORTS["members_desc"])
+    rows = query_all(
+        f"""
+        SELECT
+            g.*,
+            u.username AS creator_name,
+            COUNT(m.id) AS total,
+            COALESCE(SUM(CASE WHEN m.gender = 'M' THEN 1 ELSE 0 END), 0) AS male,
+            COALESCE(SUM(CASE WHEN m.gender = 'F' THEN 1 ELSE 0 END), 0) AS female
+        FROM genealogies g
+        JOIN users u ON u.id = g.creator_user_id
+        LEFT JOIN members m ON m.genealogy_id = g.id
+        WHERE ? = 1
+           OR g.creator_user_id = ?
+           OR EXISTS (
+                SELECT 1
+                FROM genealogy_collaborators c
+                WHERE c.genealogy_id = g.id
+                  AND c.user_id = ?
+           )
+        GROUP BY g.id
+        ORDER BY {order_by}
+        """,
+        (1 if is_admin_user() else 0, g.user["id"], g.user["id"]),
+    )
+    return [
+        {
+            "genealogy": row,
+            "total": row["total"],
+            "male": row["male"],
+            "female": row["female"],
+        }
+        for row in rows
+    ]
+
+
 def accessible_genealogies() -> list[sqlite3.Row]:
+    if is_admin_user():
+        return query_all(
+            """
+            SELECT g.*, u.username AS creator_name
+            FROM genealogies g
+            JOIN users u ON u.id = g.creator_user_id
+            ORDER BY g.created_at DESC, g.id DESC
+            """
+        )
+
     return query_all(
         """
         SELECT DISTINCT g.*, u.username AS creator_name
@@ -674,6 +714,16 @@ def require_genealogy_access(genealogy_id: int, owner_only: bool = False) -> sql
             WHERE g.id = ? AND g.creator_user_id = ?
             """,
             (genealogy_id, g.user["id"]),
+        )
+    elif is_admin_user():
+        genealogy = query_one(
+            """
+            SELECT g.*, u.username AS creator_name
+            FROM genealogies g
+            JOIN users u ON u.id = g.creator_user_id
+            WHERE g.id = ?
+            """,
+            (genealogy_id,),
         )
     else:
         genealogy = query_one(

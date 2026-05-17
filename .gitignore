@@ -4,5 +4,6 @@ __pycache__/
 .agents/
 *.pyc
 *.db
+*.bak
 data/generated/
 exports/*.csv

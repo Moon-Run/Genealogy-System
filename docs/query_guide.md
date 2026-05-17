@@ -1,0 +1,252 @@
+# 查询功能与核心实现逻辑
+
+本文档用于验收讲解，说明系统已经实现的查询功能、输入输出、核心 SQL/算法思路，以及针对大规模族谱的性能处理。
+
+## 1. 姓名查 ID
+
+用途：解决同名同姓、不同世代成员难以区分的问题。
+
+输入：姓名关键词，例如 `陈艳`。
+
+输出：匹配成员的 `id`、展示姓名、性别、世代、生卒年，并提供成员详情入口。
+
+核心逻辑：
+
+- 查询入口在 `templates/queries.html` 的“姓名查 ID”卡片。
+- 后端调用 `lookup_members_by_name()`，复用 `search_members()`。
+- 优先使用 SQLite FTS5 虚拟表 `members_fts` 做姓名全文检索。
+- 若 FTS 不可用或无结果，则回退到 `LIKE '%关键词%'`。
+- 最多返回 200 条，避免重名过多时页面过大。
+
+相关优化：
+
+- `schema.sql` 中设计了 `members_fts`，并通过 `trg_members_fts_insert/update/delete` 自动同步。
+- `idx_members_genealogy_name(genealogy_id, name)` 支撑族谱内姓名过滤。
+
+## 2. 配偶及子女查询
+
+用途：满足实验要求“给定成员 ID，查询其配偶及所有子女”。
+
+输入：成员 ID。
+
+输出：父母、配偶、子女三组家庭关系。
+
+核心逻辑：
+
+- 配偶来自 `marriages` 表。由于婚姻关系用 `member1_id < member2_id` 规范方向，查询时用 `CASE` 判断当前成员在左侧还是右侧。
+- 子女来自 `parent_child_relations`，条件为 `parent_id = 当前成员 ID`。
+- 父母来自 `parent_child_relations`，条件为 `child_id = 当前成员 ID`，并通过 `relation_type` 区分父亲和母亲。
+
+性能依赖：
+
+- `idx_marriages_member1`
+- `idx_marriages_member2`
+- `idx_parent_child_parent(parent_id, child_id)`
+- `idx_parent_child_child(child_id, parent_id)`
+
+## 3. 历代祖先查询
+
+用途：输入一个人物 ID，向上追溯父辈以上所有祖先。
+
+输入：成员 ID。
+
+输出：不同祖先列表，包含向上第几代、父系/母系关系。
+
+核心逻辑：
+
+- 核心 SQL 文件 `sql/core_queries.sql` 保留 Recursive CTE 写法，满足实验要求。
+- UI 中为了避免深代成员沿父母双边递归时产生大量重复路径，采用应用层去重遍历：
+  1. 一次性读取当前族谱的 `child_id -> parent_id` 边。
+  2. 建立 `child -> parents` 映射。
+  3. 从目标成员开始 BFS/DFS 向上访问。
+  4. 用 `visited` 集合保证每个祖先最多访问一次。
+  5. UI 最多展示前 500 个不同祖先，超出时提示截断。
+
+这样既保留了递归查询材料，也保证 5 万人族谱验收时不会卡死。
+
+## 4. 直系后代 DFS 查询
+
+用途：查询某个成员的所有直系后代，并按族谱分支顺序展示。
+
+输入：祖先 ID、显示上限。
+
+输出：后代成员列表，包含深度、ID、姓名、性别、生卒年、世代。
+
+核心逻辑：
+
+- 后端函数 `descendants_flat()` 一次性读取当前族谱的亲子边。
+- 构建 `parent_id -> children` 映射。
+- 使用 DFS 顺序遍历：
+  1. 先输出祖先。
+  2. 完整输出第一个子女的全部后代子树。
+  3. 再输出下一个子女分支。
+- 用 `visited` 去重，避免父母双边导致同一成员重复出现在结果中。
+
+该逻辑也用于分支 CSV 导出，保证页面展示顺序和导出顺序一致。
+
+## 5. 树形预览
+
+用途：在族谱详情页用可视化层级树展示某个分支。
+
+输入：根成员 ID、显示节点数。
+
+输出：带连线的层次关系树，节点展示 ID、姓名、性别、世代、生卒年、配偶。
+
+核心逻辑：
+
+- 后端函数 `descendants_tree()` 一次读取成员、亲子边、婚姻边。
+- 建立两个映射：
+  - `parent_id -> children`
+  - `member_id -> spouses`
+- 使用 DFS 构造嵌套字典树。
+- 前端用 Jinja 递归宏 `render_tree()` 渲染树节点。
+- 页面提供 `tree_limit` 输入，允许在 50 到 1000 个节点之间调整显示数量。
+
+为什么不用 BFS：
+
+- BFS 会把同一代成员混在一起，先输出第一代、再输出第二代，无法连续观察每个家庭分支。
+- DFS 更符合族谱阅读习惯：一个祖先的某个子树完整展开后，再进入下一个子树。
+
+## 6. 亲缘链路查询
+
+用途：输入两个人 ID，判断是否存在亲缘或婚姻通路，并展示最短链路。
+
+输入：成员 A ID、成员 B ID、最大搜索深度。
+
+输出：最短链路长度、关系方向、路径上的成员。
+
+核心逻辑：
+
+- 把关系抽象为无向图：
+  - 父母 -> 子女
+  - 子女 -> 父母
+  - 配偶 -> 配偶
+- 后端函数 `kinship_path()` 只读取当前族谱的边，构建邻接表。
+- 使用 BFS 搜索最短路径。
+- 用 `visited` 避免重复访问节点。
+- 最大深度默认 20，最高 30，防止极端大图无限扩展。
+
+相比 SQL 递归拼接路径，应用层 BFS 更容易控制访问范围，也更适合验收演示时快速返回。
+
+## 7. 曾孙查询
+
+用途：满足物理优化部分“查询某曾祖父的所有曾孙（四代查询）”。
+
+输入：曾祖父/母 ID。
+
+输出：与输入成员相隔三条亲子边的后代。
+
+核心 SQL 逻辑：
+
+```sql
+SELECT great_grandchild.*
+FROM parent_child_relations r1
+JOIN parent_child_relations r2 ON r2.parent_id = r1.child_id
+JOIN parent_child_relations r3 ON r3.parent_id = r2.child_id
+JOIN members great_grandchild ON great_grandchild.id = r3.child_id
+WHERE r1.parent_id = :ancestor_id;
+```
+
+性能依赖：
+
+- `idx_parent_child_parent(parent_id, child_id)` 可以让每一层从父节点到子节点的连接走索引。
+- 文档 `docs/database_design.md` 中说明了如何用 `EXPLAIN QUERY PLAN` 对比有无索引。
+
+## 8. 平均寿命最长世代
+
+用途：满足统计分析要求“统计某个家族中平均寿命最长的一代人”。
+
+输入：族谱 ID。
+
+输出：按平均寿命排序的世代表，第一行即平均寿命最长世代。
+
+核心逻辑：
+
+- 对 `members` 按 `generation` 分组。
+- 寿命计算为 `COALESCE(death_year, 当前年份) - birth_year`。
+- 排序取平均寿命最高的一代。
+
+性能依赖：
+
+- `idx_members_generation(genealogy_id, generation)`
+- `idx_members_life_stats(genealogy_id, gender, birth_year, death_year)`
+
+## 9. 高龄无配偶男性
+
+用途：满足统计分析要求“查询所有年龄超过 50 岁、且没有配偶的男性成员”。
+
+输入：年龄阈值，默认 50。
+
+输出：符合条件的男性成员，最多 200 人。
+
+核心逻辑：
+
+- 从 `members` 筛选：
+  - `gender = 'M'`
+  - `当前年份 - birth_year > 阈值`
+- 使用 `NOT EXISTS` 判断该成员不存在于 `marriages.member1_id` 或 `marriages.member2_id`。
+
+## 10. 早于同代平均出生年
+
+用途：满足统计分析要求“找出出生年份早于该辈分平均出生年份的成员”。
+
+输入：族谱 ID。
+
+输出：成员 ID、姓名、世代、出生年、本代平均出生年。
+
+核心逻辑：
+
+- 先用 CTE `generation_avg` 计算每个世代的平均出生年。
+- 再把 `members` 与 `generation_avg` 按族谱和世代连接。
+- 过滤 `m.birth_year < avg_birth_year`。
+
+## 11. 最近共同祖先
+
+用途：创意扩展，用于解释两个成员是否来自同一祖先分支。
+
+输入：成员 A ID、成员 B ID。
+
+输出：最近共同祖先，以及该祖先分别距离 A、B 几代。
+
+核心逻辑：
+
+- 分别查询 A 和 B 的祖先集合，并记录祖先深度。
+- 取两个集合交集。
+- 按 `depth_a + depth_b` 最小选择最近共同祖先。
+
+## 12. 世代画像
+
+用途：创意扩展，用于快速概览一个族谱每一代的规模和年代跨度。
+
+输入：族谱 ID。
+
+输出：每一代的人数、男性数、女性数、最早出生年、最晚出生年。
+
+核心逻辑：
+
+- 对 `members` 按 `generation` 分组。
+- 用条件聚合统计男女数量。
+- 用 `MIN(birth_year)` 和 `MAX(birth_year)` 展示年代跨度。
+
+## 13. 成员列表分页
+
+族谱详情页左侧成员列表已改成分页：
+
+- 默认每页 50 人。
+- 可切换每页 50 或 100 人。
+- 可输入页码跳转。
+- 姓名模糊搜索结果同样分页。
+
+这样既可以浏览全部成员，又不会一次性渲染 5 万行导致浏览器卡顿。
+
+## 14. 展示姓名处理
+
+模拟数据中部分姓名后面带有数字，例如 `陈艳1`，该数字用于数据生成时区分批次或世代，不适合作为验收界面中的展示姓名。
+
+系统新增 Jinja 过滤器 `display_name`：
+
+- 只在前端展示层去掉姓名末尾数字。
+- 数据库原始姓名不变。
+- 搜索仍然可以按原始姓名或去掉数字后的姓名关键词匹配。
+
+这样既保证界面自然，又不破坏已有数据和关系约束。

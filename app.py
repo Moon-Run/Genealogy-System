@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import csv
 import os
+import re
 import sqlite3
 from pathlib import Path
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import Any
 
 TREE_PREVIEW_LIMIT = 200
@@ -27,10 +28,17 @@ BASE_DIR = Path(__file__).resolve().parent
 DATABASE = BASE_DIR / "genealogy.db"
 
 
+def display_name(name: str | None) -> str:
+    if not name:
+        return ""
+    return re.sub(r"\d+$", "", str(name))
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
     app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-genealogy-secret")
     app.config["DATABASE"] = os.environ.get("DATABASE", str(DATABASE))
+    app.jinja_env.filters["display_name"] = display_name
     register_cli(app)
 
     @app.before_request
@@ -138,18 +146,32 @@ def create_app() -> Flask:
     def genealogy_detail(genealogy_id: int):
         genealogy = require_genealogy_access(genealogy_id)
         keyword = request.args.get("q", "").strip()
-        members = search_members(genealogy_id, keyword)
         total = query_value("SELECT COUNT(*) FROM members WHERE genealogy_id = ?", (genealogy_id,))
-        tree, tree_truncated, tree_count = descendants_tree(genealogy_id, request.args.get("root_id", type=int))
+        page = max(1, request.args.get("page", default=1, type=int))
+        per_page = min(max(request.args.get("per_page", default=50, type=int), 20), 100)
+        member_total = count_members(genealogy_id, keyword)
+        total_pages = max(1, (member_total + per_page - 1) // per_page)
+        page = min(page, total_pages)
+        members = search_members(genealogy_id, keyword, limit=per_page, offset=(page - 1) * per_page)
+        tree_limit = min(max(request.args.get("tree_limit", default=TREE_PREVIEW_LIMIT, type=int), 50), 1000)
+        tree, tree_truncated, tree_count = descendants_tree(
+            genealogy_id,
+            request.args.get("root_id", type=int),
+            limit=tree_limit,
+        )
         return render_template(
             "genealogy.html",
             genealogy=genealogy,
             members=members,
             keyword=keyword,
             total=total,
+            member_total=member_total,
+            page=page,
+            per_page=per_page,
+            total_pages=total_pages,
             tree=tree,
             tree_truncated=tree_truncated,
-            tree_limit=TREE_PREVIEW_LIMIT,
+            tree_limit=tree_limit,
             tree_count=tree_count,
         )
 
@@ -319,40 +341,73 @@ def create_app() -> Flask:
     @login_required
     def queries(genealogy_id: int):
         genealogy = require_genealogy_access(genealogy_id)
-        members = query_all(
-            "SELECT id, name, generation, birth_year FROM members WHERE genealogy_id = ? ORDER BY generation, id",
+        query_samples = query_all(
+            """
+            SELECT id, name, generation, birth_year
+            FROM members
+            WHERE genealogy_id = ?
+            ORDER BY generation, birth_year, id
+            LIMIT 12
+            """,
             (genealogy_id,),
         )
         result = None
         query_type = request.form.get("query_type", "ancestors")
         if request.method == "POST":
-            if query_type == "ancestors":
-                result = ancestors(int(request.form["member_id"]))
-            elif query_type == "kinship":
-                result = kinship_path(
-                    genealogy_id,
-                    int(request.form["member_a_id"]),
-                    int(request.form["member_b_id"]),
-                )
-            elif query_type == "family":
-                member_id = int(request.form["member_id"])
-                result = {
-                    "spouses": spouses_for(member_id),
-                    "children": query_all(
-                        """
-                        SELECT c.*, r.relation_type
-                        FROM parent_child_relations r
-                        JOIN members c ON c.id = r.child_id
-                        WHERE r.parent_id = ?
-                        ORDER BY c.birth_year, c.id
-                        """,
-                        (member_id,),
-                    ),
-                }
+            try:
+                if query_type == "ancestors":
+                    member_id = form_member_id("member_id")
+                    member = require_member(genealogy_id, member_id)
+                    ancestor_rows, truncated = ancestors(member_id)
+                    result = {"member": member, "ancestors": ancestor_rows, "truncated": truncated}
+                elif query_type == "name_lookup":
+                    name = request.form.get("name", "").strip()
+                    if not name:
+                        raise ValueError("请填写姓名")
+                    result = {"name": name, "rows": lookup_members_by_name(genealogy_id, name)}
+                elif query_type == "kinship":
+                    result = kinship_path(
+                        genealogy_id,
+                        form_member_id("member_a_id"),
+                        form_member_id("member_b_id"),
+                        max_depth=min(max(int(request.form.get("max_depth") or 20), 1), 30),
+                    )
+                elif query_type == "family":
+                    member_id = form_member_id("member_id")
+                    member = require_member(genealogy_id, member_id)
+                    result = family_snapshot(member_id)
+                    result["member"] = member
+                elif query_type == "descendants":
+                    member_id = form_member_id("member_id")
+                    member = require_member(genealogy_id, member_id)
+                    limit = min(max(int(request.form.get("limit") or 200), 1), 1000)
+                    rows, truncated = descendants_flat(member_id, limit=limit)
+                    result = {"member": member, "rows": rows, "truncated": truncated, "limit": limit}
+                elif query_type == "great_grandchildren":
+                    member_id = form_member_id("member_id")
+                    member = require_member(genealogy_id, member_id)
+                    result = {"member": member, "rows": great_grandchildren(member_id)}
+                elif query_type == "generation_lifespan":
+                    result = generation_lifespan_stats(genealogy_id)
+                elif query_type == "unmarried_males":
+                    age = min(max(int(request.form.get("age") or 50), 1), 150)
+                    result = {"age": age, "rows": unmarried_males(genealogy_id, age)}
+                elif query_type == "early_birth":
+                    result = early_birth_members(genealogy_id)
+                elif query_type == "common_ancestor":
+                    result = closest_common_ancestor(
+                        genealogy_id,
+                        form_member_id("member_a_id"),
+                        form_member_id("member_b_id"),
+                    )
+                elif query_type == "generation_profile":
+                    result = generation_profile(genealogy_id)
+            except (ValueError, sqlite3.Error) as exc:
+                flash(f"查询失败：{exc}", "error")
         return render_template(
             "queries.html",
             genealogy=genealogy,
-            members=members,
+            query_samples=query_samples,
             query_type=query_type,
             result=result,
         )
@@ -538,16 +593,28 @@ def execute(sql: str, params: tuple[Any, ...] = ()) -> None:
         db.execute(sql, params)
 
 
-def search_members(genealogy_id: int, keyword: str) -> list[sqlite3.Row]:
+def count_members(genealogy_id: int, keyword: str = "") -> int:
+    if keyword:
+        return int(
+            query_value(
+                "SELECT COUNT(*) FROM members WHERE genealogy_id = ? AND name LIKE ?",
+                (genealogy_id, f"%{keyword}%"),
+            )
+            or 0
+        )
+    return int(query_value("SELECT COUNT(*) FROM members WHERE genealogy_id = ?", (genealogy_id,)) or 0)
+
+
+def search_members(genealogy_id: int, keyword: str, limit: int = 200, offset: int = 0) -> list[sqlite3.Row]:
     if not keyword:
         return query_all(
             """
             SELECT * FROM members
             WHERE genealogy_id = ?
             ORDER BY generation, birth_year, id
-            LIMIT 200
+            LIMIT ? OFFSET ?
             """,
-            (genealogy_id,),
+            (genealogy_id, limit, offset),
         )
 
     has_fts = query_one(
@@ -563,9 +630,9 @@ def search_members(genealogy_id: int, keyword: str) -> list[sqlite3.Row]:
                 JOIN members m ON m.id = members_fts.rowid
                 WHERE members_fts.name MATCH ? AND m.genealogy_id = ?
                 ORDER BY bm25(members_fts), m.generation, m.birth_year, m.id
-                LIMIT 200
+                LIMIT ? OFFSET ?
                 """,
-                (fts_query, genealogy_id),
+                (fts_query, genealogy_id, limit, offset),
             )
             if rows:
                 return rows
@@ -575,9 +642,9 @@ def search_members(genealogy_id: int, keyword: str) -> list[sqlite3.Row]:
         SELECT * FROM members
         WHERE genealogy_id = ? AND name LIKE ?
         ORDER BY generation, birth_year, id
-        LIMIT 200
+        LIMIT ? OFFSET ?
         """,
-        (genealogy_id, f"%{keyword}%"),
+        (genealogy_id, f"%{keyword}%", limit, offset),
     )
 
 
@@ -651,6 +718,13 @@ def to_int_or_none(value: str | None) -> int | None:
     return int(value)
 
 
+def form_member_id(field_name: str) -> int:
+    value = request.form.get(field_name, "").strip()
+    if not value:
+        raise ValueError("请填写成员 ID")
+    return int(value)
+
+
 def spouses_for(member_id: int) -> list[sqlite3.Row]:
     return query_all(
         """
@@ -665,6 +739,36 @@ def spouses_for(member_id: int) -> list[sqlite3.Row]:
         """,
         (member_id, member_id, member_id),
     )
+
+
+def family_snapshot(member_id: int) -> dict[str, Any]:
+    return {
+        "parents": query_all(
+            """
+            SELECT p.*, r.relation_type
+            FROM parent_child_relations r
+            JOIN members p ON p.id = r.parent_id
+            WHERE r.child_id = ?
+            ORDER BY r.relation_type, p.birth_year, p.id
+            """,
+            (member_id,),
+        ),
+        "spouses": spouses_for(member_id),
+        "children": query_all(
+            """
+            SELECT c.*, r.relation_type
+            FROM parent_child_relations r
+            JOIN members c ON c.id = r.child_id
+            WHERE r.parent_id = ?
+            ORDER BY c.birth_year, c.id
+            """,
+            (member_id,),
+        ),
+    }
+
+
+def lookup_members_by_name(genealogy_id: int, name: str) -> list[sqlite3.Row]:
+    return search_members(genealogy_id, name, limit=200, offset=0)
 
 
 def sync_child_generation(child_id: int) -> None:
@@ -755,7 +859,7 @@ def descendants_flat(root_id: int, limit: int | None = None) -> tuple[list[dict[
     return result, truncated
 
 
-def descendants_tree(genealogy_id: int, root_id: int | None) -> tuple[dict[str, Any] | None, bool, int]:
+def descendants_tree(genealogy_id: int, root_id: int | None, limit: int = TREE_PREVIEW_LIMIT) -> tuple[dict[str, Any] | None, bool, int]:
     if root_id is None:
         root = query_one(
             """
@@ -846,7 +950,7 @@ def descendants_tree(genealogy_id: int, root_id: int | None) -> tuple[dict[str, 
         nonlocal count, truncated
         if truncated or member_id in visited:
             return None
-        if count >= TREE_PREVIEW_LIMIT:
+        if count >= limit:
             truncated = True
             return None
         member = members_by_id.get(member_id)
@@ -880,78 +984,260 @@ def relation_label(relation_type: str | None) -> str:
     return "根节点"
 
 
-def ancestors(member_id: int) -> list[sqlite3.Row]:
+def ancestors(member_id: int, limit: int = 500) -> tuple[list[dict[str, Any]], bool]:
+    member = query_one("SELECT id, genealogy_id FROM members WHERE id = ?", (member_id,))
+    if member is None:
+        return [], False
+
+    edges = query_all(
+        """
+        SELECT r.child_id, r.parent_id, r.relation_type,
+               p.name, p.gender, p.birth_year, p.death_year, p.generation
+        FROM parent_child_relations r
+        JOIN members p ON p.id = r.parent_id
+        WHERE p.genealogy_id = ?
+        ORDER BY p.birth_year, p.id
+        """,
+        (member["genealogy_id"],),
+    )
+    parents_by_child: dict[int, list[sqlite3.Row]] = defaultdict(list)
+    for edge in edges:
+        parents_by_child[edge["child_id"]].append(edge)
+
+    result: list[dict[str, Any]] = []
+    visited = {member_id}
+    queue = deque([(member_id, 0)])
+    truncated = False
+    while queue:
+        child_id, depth = queue.popleft()
+        for edge in parents_by_child.get(child_id, []):
+            parent_id = edge["parent_id"]
+            if parent_id in visited:
+                continue
+            if len(result) >= limit:
+                truncated = True
+                return result, truncated
+            visited.add(parent_id)
+            result.append(
+                {
+                    "id": parent_id,
+                    "name": edge["name"],
+                    "gender": edge["gender"],
+                    "birth_year": edge["birth_year"],
+                    "death_year": edge["death_year"],
+                    "generation": edge["generation"],
+                    "depth": depth + 1,
+                    "relation_type": edge["relation_type"],
+                }
+            )
+            queue.append((parent_id, depth + 1))
+
+    result.sort(key=lambda row: (row["depth"], row["relation_type"], row["birth_year"] or 0, row["id"]))
+    return result, truncated
+
+
+def great_grandchildren(member_id: int) -> list[sqlite3.Row]:
     return query_all(
         """
-        WITH RECURSIVE ancestors(id, name, gender, birth_year, death_year, generation, depth, relation_type) AS (
-            SELECT p.id, p.name, p.gender, p.birth_year, p.death_year, p.generation, 1, r.relation_type
-            FROM parent_child_relations r
-            JOIN members p ON p.id = r.parent_id
-            WHERE r.child_id = ?
-            UNION ALL
-            SELECT gp.id, gp.name, gp.gender, gp.birth_year, gp.death_year, gp.generation,
-                   a.depth + 1, r.relation_type
-            FROM ancestors a
-            JOIN parent_child_relations r ON r.child_id = a.id
-            JOIN members gp ON gp.id = r.parent_id
-        )
-        SELECT DISTINCT * FROM ancestors ORDER BY depth, relation_type, birth_year, id
+        SELECT DISTINCT great_grandchild.*
+        FROM parent_child_relations r1
+        JOIN parent_child_relations r2 ON r2.parent_id = r1.child_id
+        JOIN parent_child_relations r3 ON r3.parent_id = r2.child_id
+        JOIN members great_grandchild ON great_grandchild.id = r3.child_id
+        WHERE r1.parent_id = ?
+        ORDER BY great_grandchild.birth_year, great_grandchild.id
+        LIMIT 500
         """,
         (member_id,),
     )
 
 
-def kinship_path(genealogy_id: int, member_a_id: int, member_b_id: int) -> dict[str, Any] | None:
+def generation_lifespan_stats(genealogy_id: int) -> dict[str, Any]:
+    rows = query_all(
+        """
+        SELECT generation,
+               COUNT(*) AS member_count,
+               AVG(COALESCE(death_year, CAST(strftime('%Y', 'now') AS INTEGER)) - birth_year) AS avg_lifespan
+        FROM members
+        WHERE genealogy_id = ?
+          AND birth_year IS NOT NULL
+        GROUP BY generation
+        ORDER BY avg_lifespan DESC, generation
+        LIMIT 20
+        """,
+        (genealogy_id,),
+    )
+    return {"rows": rows, "best": rows[0] if rows else None}
+
+
+def unmarried_males(genealogy_id: int, age: int) -> list[sqlite3.Row]:
+    return query_all(
+        """
+        SELECT m.*
+        FROM members m
+        WHERE m.genealogy_id = ?
+          AND m.gender = 'M'
+          AND m.birth_year IS NOT NULL
+          AND CAST(strftime('%Y', 'now') AS INTEGER) - m.birth_year > ?
+          AND NOT EXISTS (
+              SELECT 1
+              FROM marriages s
+              WHERE s.member1_id = m.id OR s.member2_id = m.id
+          )
+        ORDER BY m.birth_year, m.id
+        LIMIT 200
+        """,
+        (genealogy_id, age),
+    )
+
+
+def early_birth_members(genealogy_id: int) -> list[sqlite3.Row]:
+    return query_all(
+        """
+        WITH generation_avg AS (
+            SELECT genealogy_id, generation, AVG(birth_year) AS avg_birth_year
+            FROM members
+            WHERE genealogy_id = ?
+              AND birth_year IS NOT NULL
+            GROUP BY genealogy_id, generation
+        )
+        SELECT m.*, g.avg_birth_year
+        FROM members m
+        JOIN generation_avg g
+          ON g.genealogy_id = m.genealogy_id
+         AND g.generation = m.generation
+        WHERE m.genealogy_id = ?
+          AND m.birth_year IS NOT NULL
+          AND m.birth_year < g.avg_birth_year
+        ORDER BY m.generation, m.birth_year, m.id
+        LIMIT 200
+        """,
+        (genealogy_id, genealogy_id),
+    )
+
+
+def generation_profile(genealogy_id: int) -> list[sqlite3.Row]:
+    return query_all(
+        """
+        SELECT generation,
+               COUNT(*) AS member_count,
+               SUM(CASE WHEN gender = 'M' THEN 1 ELSE 0 END) AS male_count,
+               SUM(CASE WHEN gender = 'F' THEN 1 ELSE 0 END) AS female_count,
+               MIN(birth_year) AS earliest_birth,
+               MAX(birth_year) AS latest_birth
+        FROM members
+        WHERE genealogy_id = ?
+        GROUP BY generation
+        ORDER BY generation
+        LIMIT 80
+        """,
+        (genealogy_id,),
+    )
+
+
+def ancestor_depths(member_id: int) -> dict[int, int]:
+    rows = query_all(
+        """
+        WITH RECURSIVE up(id, depth) AS (
+            SELECT parent_id, 1
+            FROM parent_child_relations
+            WHERE child_id = ?
+            UNION ALL
+            SELECT r.parent_id, up.depth + 1
+            FROM up
+            JOIN parent_child_relations r ON r.child_id = up.id
+            WHERE up.depth < 40
+        )
+        SELECT id, MIN(depth) AS depth
+        FROM up
+        GROUP BY id
+        """,
+        (member_id,),
+    )
+    return {row["id"]: row["depth"] for row in rows}
+
+
+def closest_common_ancestor(genealogy_id: int, member_a_id: int, member_b_id: int) -> dict[str, Any]:
+    member_a = require_member(genealogy_id, member_a_id)
+    member_b = require_member(genealogy_id, member_b_id)
+    ancestors_a = ancestor_depths(member_a_id)
+    ancestors_b = ancestor_depths(member_b_id)
+    common_ids = set(ancestors_a) & set(ancestors_b)
+    if not common_ids:
+        return {"member_a": member_a, "member_b": member_b, "ancestor": None}
+    ancestor_id = min(common_ids, key=lambda item: (ancestors_a[item] + ancestors_b[item], max(ancestors_a[item], ancestors_b[item]), item))
+    return {
+        "member_a": member_a,
+        "member_b": member_b,
+        "ancestor": query_one("SELECT * FROM members WHERE id = ?", (ancestor_id,)),
+        "depth_a": ancestors_a[ancestor_id],
+        "depth_b": ancestors_b[ancestor_id],
+    }
+
+
+def kinship_path(genealogy_id: int, member_a_id: int, member_b_id: int, max_depth: int = 20) -> dict[str, Any] | None:
     require_member(genealogy_id, member_a_id)
     require_member(genealogy_id, member_b_id)
-    path_row = query_one(
+    if member_a_id == member_b_id:
+        member = require_member(genealogy_id, member_a_id)
+        return {"depth": 0, "labels": "同一成员", "members": [member], "visited_count": 1}
+
+    graph: dict[int, list[tuple[int, str]]] = defaultdict(list)
+    for row in query_all(
         """
-        WITH RECURSIVE graph(from_id, to_id, label) AS (
-            SELECT parent_id, child_id, relation_type || '->child' FROM parent_child_relations
-            UNION ALL
-            SELECT child_id, parent_id, 'child->' || relation_type FROM parent_child_relations
-            UNION ALL
-            SELECT member1_id, member2_id, 'spouse' FROM marriages
-            UNION ALL
-            SELECT member2_id, member1_id, 'spouse' FROM marriages
-        ),
-        search(id, path, labels, depth) AS (
-            SELECT ?, printf('%d', ?), '', 0
-            UNION ALL
-            SELECT g.to_id,
-                   search.path || ',' || g.to_id,
-                   CASE
-                       WHEN search.labels = '' THEN g.label
-                       ELSE search.labels || ' -> ' || g.label
-                   END,
-                   search.depth + 1
-            FROM search
-            JOIN graph g ON g.from_id = search.id
-            WHERE search.depth < 20
-              AND instr(',' || search.path || ',', ',' || g.to_id || ',') = 0
-        )
-        SELECT s.depth, s.labels, s.path
-        FROM search s
-        WHERE s.id = ?
-        ORDER BY s.depth
-        LIMIT 1
+        SELECT r.parent_id, r.child_id, r.relation_type
+        FROM parent_child_relations r
+        JOIN members p ON p.id = r.parent_id
+        WHERE p.genealogy_id = ?
         """,
-        (member_a_id, member_a_id, member_b_id),
-    )
-    if path_row is None:
+        (genealogy_id,),
+    ):
+        down_label = "父亲 -> 子女" if row["relation_type"] == "father" else "母亲 -> 子女"
+        up_label = "子女 -> 父亲" if row["relation_type"] == "father" else "子女 -> 母亲"
+        graph[row["parent_id"]].append((row["child_id"], down_label))
+        graph[row["child_id"]].append((row["parent_id"], up_label))
+    for row in query_all(
+        """
+        SELECT s.member1_id, s.member2_id
+        FROM marriages s
+        JOIN members m1 ON m1.id = s.member1_id
+        WHERE m1.genealogy_id = ?
+        """,
+        (genealogy_id,),
+    ):
+        graph[row["member1_id"]].append((row["member2_id"], "配偶"))
+        graph[row["member2_id"]].append((row["member1_id"], "配偶"))
+
+    queue = deque([(member_a_id, [member_a_id], [])])
+    visited = {member_a_id}
+    while queue:
+        current_id, path, labels = queue.popleft()
+        if len(labels) >= max_depth:
+            continue
+        for next_id, label in graph.get(current_id, []):
+            if next_id in visited:
+                continue
+            next_path = path + [next_id]
+            next_labels = labels + [label]
+            if next_id == member_b_id:
+                rows = query_all(
+                    f"SELECT * FROM members WHERE id IN ({','.join('?' for _ in next_path)})",
+                    tuple(next_path),
+                )
+                by_id = {row["id"]: row for row in rows}
+                return {
+                    "depth": len(next_labels),
+                    "labels": " -> ".join(next_labels),
+                    "members": [by_id[item] for item in next_path],
+                    "visited_count": len(visited),
+                }
+            visited.add(next_id)
+            queue.append((next_id, next_path, next_labels))
+
+    if len(visited) > 0:
+        return {"depth": None, "labels": "", "members": [], "visited_count": len(visited), "max_depth": max_depth}
+    else:
         return None
-    ids = [int(item) for item in path_row["path"].split(",")]
-    placeholders = ",".join("?" for _ in ids)
-    rows = query_all(
-        f"SELECT * FROM members WHERE id IN ({placeholders})",
-        tuple(ids),
-    )
-    by_id = {row["id"]: row for row in rows}
-    return {
-        "depth": path_row["depth"],
-        "labels": path_row["labels"],
-        "members": [by_id[item] for item in ids],
-    }
 
 
 app = create_app()

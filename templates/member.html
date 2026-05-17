@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}{{ member.name }} - 族谱管理系统{% endblock %}
+{% block title %}{{ member.name|display_name }} - 族谱管理系统{% endblock %}
 {% block content %}
 <section class="section-head">
     <div>
-        <h1>#{{ member.id }} {{ member.name }}</h1>
+        <h1>#{{ member.id }} {{ member.name|display_name }}</h1>
         <p><a href="{{ url_for('genealogy_detail', genealogy_id=genealogy.id) }}">{{ genealogy.name }}</a> · 第 {{ member.generation }} 代</p>
     </div>
     <form method="post" action="{{ url_for('delete_member', genealogy_id=genealogy.id, member_id=member.id) }}" onsubmit="return confirm('确认删除该成员及其关系？')">
@@ -36,7 +36,7 @@
         <h3>父母</h3>
         <ul class="plain-list">
             {% for item in parents %}
-                <li>{{ "父亲" if item.relation_type == "father" else "母亲" }}：<a href="{{ url_for('member_detail', genealogy_id=genealogy.id, member_id=item.id) }}">{{ item.name }}</a></li>
+                <li>{{ "父亲" if item.relation_type == "father" else "母亲" }}：<a href="{{ url_for('member_detail', genealogy_id=genealogy.id, member_id=item.id) }}">{{ item.name|display_name }}</a></li>
             {% else %}
                 <li>暂无父母关系。</li>
             {% endfor %}
@@ -44,7 +44,7 @@
         <h3>子女</h3>
         <ul class="plain-list">
             {% for item in children %}
-                <li><a href="{{ url_for('member_detail', genealogy_id=genealogy.id, member_id=item.id) }}">{{ item.name }}</a>（{{ item.birth_year or "未知出生年" }}）</li>
+                <li><a href="{{ url_for('member_detail', genealogy_id=genealogy.id, member_id=item.id) }}">{{ item.name|display_name }}</a>（{{ item.birth_year or "未知出生年" }}）</li>
             {% else %}
                 <li>暂无子女关系。</li>
             {% endfor %}
@@ -54,7 +54,7 @@
         <h2>配偶</h2>
         <ul class="plain-list">
             {% for item in spouses %}
-                <li><a href="{{ url_for('member_detail', genealogy_id=genealogy.id, member_id=item.id) }}">{{ item.name }}</a>（{{ item.married_year or "未知婚年" }}）</li>
+                <li><a href="{{ url_for('member_detail', genealogy_id=genealogy.id, member_id=item.id) }}">{{ item.name|display_name }}</a>（{{ item.married_year or "未知婚年" }}）</li>
             {% else %}
                 <li>暂无婚姻关系。</li>
             {% endfor %}
@@ -70,7 +70,7 @@
             <label>父/母
                 <select name="parent_id">
                     {% for item in all_members if item.id != member.id %}
-                        <option value="{{ item.id }}">#{{ item.id }} {{ item.name }}（第{{ item.generation }}代）</option>
+                        <option value="{{ item.id }}">#{{ item.id }} {{ item.name|display_name }}（第{{ item.generation }}代）</option>
                     {% endfor %}
                 </select>
             </label>
@@ -90,7 +90,7 @@
             <label>配偶
                 <select name="member2_id">
                     {% for item in all_members if item.id != member.id %}
-                        <option value="{{ item.id }}">#{{ item.id }} {{ item.name }}（第{{ item.generation }}代）</option>
+                        <option value="{{ item.id }}">#{{ item.id }} {{ item.name|display_name }}（第{{ item.generation }}代）</option>
                     {% endfor %}
                 </select>
             </label>

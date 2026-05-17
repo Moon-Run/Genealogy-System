@@ -6,7 +6,7 @@
         <article class="person-card">
             <div class="person-main">
                 <a class="person-name" href="{{ url_for('member_detail', genealogy_id=genealogy.id, member_id=node.member.id) }}">
-                    #{{ node.member.id }} {{ node.member.name }}
+                    #{{ node.member.id }} {{ node.member.name|display_name }}
                 </a>
                 <span class="person-meta">
                     {{ {"M":"男","F":"女","U":"未知"}[node.member.gender] }} · 第 {{ node.member.generation }} 代 ·
@@ -19,7 +19,7 @@
                     <span class="spouse-label">配偶</span>
                     {% for spouse in node.spouses %}
                         <a class="spouse-chip" href="{{ url_for('member_detail', genealogy_id=genealogy.id, member_id=spouse.id) }}">
-                            #{{ spouse.id }} {{ spouse.name }}{% if spouse.married_year %} · {{ spouse.married_year }}{% endif %}
+                            #{{ spouse.id }} {{ spouse.name|display_name }}{% if spouse.married_year %} · {{ spouse.married_year }}{% endif %}
                         </a>
                     {% endfor %}
                 </div>
@@ -76,6 +76,7 @@
             <input name="q" value="{{ keyword }}" placeholder="姓名模糊查找">
             <button type="submit">搜索</button>
         </form>
+        <p class="muted">共 {{ member_total }} 条匹配记录；第 {{ page }} / {{ total_pages }} 页，每页 {{ per_page }} 人。</p>
         <div class="table-wrap">
             <table>
                 <thead><tr><th>ID</th><th>姓名</th><th>性别</th><th>生卒年</th><th>世代</th><th></th></tr></thead>
@@ -83,7 +84,7 @@
                     {% for member in members %}
                         <tr>
                             <td>{{ member.id }}</td>
-                            <td>{{ member.name }}</td>
+                            <td>{{ member.name|display_name }}</td>
                             <td>{{ {"M":"男","F":"女","U":"未知"}[member.gender] }}</td>
                             <td>{{ member.birth_year or "?" }} - {{ member.death_year or "" }}</td>
                             <td>{{ member.generation }}</td>
@@ -94,6 +95,25 @@
                     {% endfor %}
                 </tbody>
             </table>
+        </div>
+        <div class="pagination">
+            {% if page > 1 %}
+                <a class="button secondary" href="{{ url_for('genealogy_detail', genealogy_id=genealogy.id, q=keyword, page=page-1, per_page=per_page, tree_limit=tree_limit) }}">上一页</a>
+            {% endif %}
+            {% if page < total_pages %}
+                <a class="button secondary" href="{{ url_for('genealogy_detail', genealogy_id=genealogy.id, q=keyword, page=page+1, per_page=per_page, tree_limit=tree_limit) }}">下一页</a>
+            {% endif %}
+            <form method="get" class="page-jump">
+                {% if keyword %}<input type="hidden" name="q" value="{{ keyword }}">{% endif %}
+                <input type="hidden" name="tree_limit" value="{{ tree_limit }}">
+                <input name="page" type="number" min="1" max="{{ total_pages }}" value="{{ page }}" aria-label="页码">
+                <select name="per_page" aria-label="每页数量">
+                    {% for size in [50, 100] %}
+                        <option value="{{ size }}" {% if per_page == size %}selected{% endif %}>每页 {{ size }}</option>
+                    {% endfor %}
+                </select>
+                <button type="submit">跳转</button>
+            </form>
         </div>
     </div>
     <div class="panel">
@@ -108,14 +128,17 @@
         </div>
         <form method="get" class="inline-form">
             {% if keyword %}<input type="hidden" name="q" value="{{ keyword }}">{% endif %}
+            <input type="hidden" name="page" value="{{ page }}">
+            <input type="hidden" name="per_page" value="{{ per_page }}">
             <input name="root_id" type="number" placeholder="根成员ID">
+            <input name="tree_limit" type="number" min="50" max="1000" value="{{ tree_limit }}" title="显示节点数">
             <button type="submit">查看分支</button>
         </form>
         {% if tree_truncated %}
             <p class="empty">当前树形预览已显示前 {{ tree_limit }} 人。请输入更具体的根成员 ID 缩小范围，或使用「导出当前分支 CSV」获取完整 DFS 数据。</p>
         {% endif %}
         <div class="tree-summary">
-            当前渲染 {{ tree_count }} 人{% if tree %}，根节点 #{{ tree.member.id }} {{ tree.member.name }}{% endif %}
+            当前渲染 {{ tree_count }} 人{% if tree %}，根节点 #{{ tree.member.id }} {{ tree.member.name|display_name }}{% endif %}
         </div>
         <div class="pedigree-scroll">
             {% if tree %}

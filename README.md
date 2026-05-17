@@ -70,5 +70,6 @@ python scripts/generate_data.py --out data/generated --large-size 50000 --total-
 
 - 数据库设计：[docs/database_design.md](docs/database_design.md)
 - 项目亮点整理：[docs/project_highlights.md](docs/project_highlights.md)
+- 查询功能讲解：[docs/query_guide.md](docs/query_guide.md)
 - 核心 SQL：[sql/core_queries.sql](sql/core_queries.sql)
 - 导入导出：[docs/import_export.md](docs/import_export.md)

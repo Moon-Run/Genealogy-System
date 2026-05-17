@@ -1,106 +1,285 @@
 {% extends "base.html" %}
 {% block title %}查询中心 - 族谱管理系统{% endblock %}
 {% block content %}
+{% macro member_link(item) -%}
+    <a href="{{ url_for('member_detail', genealogy_id=genealogy.id, member_id=item.id) }}">#{{ item.id }} {{ item.name|display_name }}</a>
+{%- endmacro %}
+
 <section class="section-head">
     <div>
         <h1>查询中心</h1>
-        <p><a href="{{ url_for('genealogy_detail', genealogy_id=genealogy.id) }}">{{ genealogy.name }}</a></p>
+        <p><a href="{{ url_for('genealogy_detail', genealogy_id=genealogy.id) }}">{{ genealogy.name }}</a> · 大族谱查询已改为按 ID 精确输入，避免一次性加载全部成员。</p>
     </div>
 </section>
 
-<section class="split">
-    <div class="panel">
+<section class="panel">
+    <h2>常用成员 ID</h2>
+    <div class="sample-strip">
+        {% for item in query_samples %}
+            <a href="{{ url_for('member_detail', genealogy_id=genealogy.id, member_id=item.id) }}">#{{ item.id }} {{ item.name|display_name }} · 第{{ item.generation }}代</a>
+        {% else %}
+            <span class="empty">暂无成员。</span>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="query-grid">
+    <div class="panel query-card">
+        <h2>姓名查 ID</h2>
+        <form method="post" class="form">
+            <input type="hidden" name="query_type" value="name_lookup">
+            <label>姓名关键词<input name="name" required placeholder="如 陈艳"></label>
+            <button type="submit">查询成员 ID</button>
+        </form>
+    </div>
+    <div class="panel query-card">
         <h2>祖先查询</h2>
         <form method="post" class="form">
             <input type="hidden" name="query_type" value="ancestors">
-            <label>成员
-                <select name="member_id">
-                    {% for item in members %}
-                        <option value="{{ item.id }}">#{{ item.id }} {{ item.name }}（第{{ item.generation }}代）</option>
-                    {% endfor %}
-                </select>
-            </label>
-            <button type="submit">查询祖先</button>
+            <label>成员 ID<input name="member_id" type="number" min="1" required placeholder="如 94441"></label>
+            <button type="submit">查询历代祖先</button>
         </form>
     </div>
-    <div class="panel">
-        <h2>亲缘关系查询</h2>
+    <div class="panel query-card">
+        <h2>亲缘链路</h2>
         <form method="post" class="form">
             <input type="hidden" name="query_type" value="kinship">
-            <label>成员 A
-                <select name="member_a_id">
-                    {% for item in members %}
-                        <option value="{{ item.id }}">#{{ item.id }} {{ item.name }}</option>
-                    {% endfor %}
-                </select>
-            </label>
-            <label>成员 B
-                <select name="member_b_id">
-                    {% for item in members %}
-                        <option value="{{ item.id }}">#{{ item.id }} {{ item.name }}</option>
-                    {% endfor %}
-                </select>
-            </label>
-            <button type="submit">查询链路</button>
+            <label>成员 A ID<input name="member_a_id" type="number" min="1" required></label>
+            <label>成员 B ID<input name="member_b_id" type="number" min="1" required></label>
+            <label>最大搜索深度<input name="max_depth" type="number" min="1" max="30" value="20"></label>
+            <button type="submit">查询最短链路</button>
         </form>
     </div>
-    <div class="panel">
+    <div class="panel query-card">
         <h2>配偶及子女</h2>
         <form method="post" class="form">
             <input type="hidden" name="query_type" value="family">
-            <label>成员
-                <select name="member_id">
-                    {% for item in members %}
-                        <option value="{{ item.id }}">#{{ item.id }} {{ item.name }}</option>
-                    {% endfor %}
-                </select>
-            </label>
+            <label>成员 ID<input name="member_id" type="number" min="1" required></label>
             <button type="submit">查询家庭</button>
+        </form>
+    </div>
+    <div class="panel query-card">
+        <h2>直系后代</h2>
+        <form method="post" class="form">
+            <input type="hidden" name="query_type" value="descendants">
+            <label>祖先 ID<input name="member_id" type="number" min="1" required></label>
+            <label>显示上限<input name="limit" type="number" min="1" max="1000" value="200"></label>
+            <button type="submit">DFS 查询后代</button>
+        </form>
+    </div>
+    <div class="panel query-card">
+        <h2>曾孙查询</h2>
+        <form method="post" class="form">
+            <input type="hidden" name="query_type" value="great_grandchildren">
+            <label>曾祖父/母 ID<input name="member_id" type="number" min="1" required></label>
+            <button type="submit">查询四代曾孙</button>
+        </form>
+    </div>
+    <div class="panel query-card">
+        <h2>共同祖先</h2>
+        <form method="post" class="form">
+            <input type="hidden" name="query_type" value="common_ancestor">
+            <label>成员 A ID<input name="member_a_id" type="number" min="1" required></label>
+            <label>成员 B ID<input name="member_b_id" type="number" min="1" required></label>
+            <button type="submit">寻找最近共同祖先</button>
+        </form>
+    </div>
+    <div class="panel query-card">
+        <h2>平均寿命最长世代</h2>
+        <form method="post" class="form">
+            <input type="hidden" name="query_type" value="generation_lifespan">
+            <button type="submit">运行统计</button>
+        </form>
+    </div>
+    <div class="panel query-card">
+        <h2>高龄无配偶男性</h2>
+        <form method="post" class="form">
+            <input type="hidden" name="query_type" value="unmarried_males">
+            <label>年龄大于<input name="age" type="number" min="1" max="150" value="50"></label>
+            <button type="submit">筛选成员</button>
+        </form>
+    </div>
+    <div class="panel query-card">
+        <h2>早于同代均值</h2>
+        <form method="post" class="form">
+            <input type="hidden" name="query_type" value="early_birth">
+            <button type="submit">查询成员</button>
+        </form>
+    </div>
+    <div class="panel query-card">
+        <h2>世代画像</h2>
+        <form method="post" class="form">
+            <input type="hidden" name="query_type" value="generation_profile">
+            <button type="submit">生成画像</button>
         </form>
     </div>
 </section>
 
 {% if result is not none %}
-<section class="panel">
+<section class="panel result-panel">
     <h2>查询结果</h2>
     {% if query_type == "ancestors" %}
+        <p class="muted">目标成员：{{ member_link(result.member) }}</p>
+        {% if result.truncated %}
+            <p class="empty">祖先结果超过显示上限，已展示前 500 个不同祖先。</p>
+        {% endif %}
         <div class="tree">
-            {% for item in result %}
+            {% for item in result.ancestors %}
                 <div class="tree-row" style="padding-left: {{ (item.depth - 1) * 24 }}px">
-                    #{{ item.id }} {{ item.name }} · 向上第 {{ item.depth }} 代 · {{ "父系" if item.relation_type == "father" else "母系" }}
+                    <span>{{ member_link(item) }} · 向上第 {{ item.depth }} 代 · {{ "父系" if item.relation_type == "father" else "母系" }}</span>
                 </div>
             {% else %}
                 <p class="empty">没有找到祖先关系。</p>
             {% endfor %}
         </div>
+    {% elif query_type == "name_lookup" %}
+        <p class="muted">姓名关键词：{{ result.name }}；最多显示 200 条，用 ID 和世代区分重名成员。</p>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>ID</th><th>姓名</th><th>性别</th><th>世代</th><th>生卒年</th><th></th></tr></thead>
+                <tbody>
+                    {% for item in result.rows %}
+                        <tr>
+                            <td>{{ item.id }}</td>
+                            <td>{{ item.name|display_name }}</td>
+                            <td>{{ {"M":"男","F":"女","U":"未知"}[item.gender] }}</td>
+                            <td>{{ item.generation }}</td>
+                            <td>{{ item.birth_year or "?" }} - {{ item.death_year or "" }}</td>
+                            <td><a href="{{ url_for('member_detail', genealogy_id=genealogy.id, member_id=item.id) }}">查看</a></td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="6">没有找到同名或近似姓名成员。</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     {% elif query_type == "kinship" %}
-        {% if result %}
-            <p>最短链路长度：{{ result.depth }}；关系方向：{{ result.labels }}</p>
-            <ol class="path">
+        {% if result.members %}
+            <p>最短链路长度：{{ result.depth }}；访问节点 {{ result.visited_count }} 个；关系方向：{{ result.labels }}</p>
+            <ol class="path relation-path">
                 {% for item in result.members %}
-                    <li>#{{ item.id }} {{ item.name }}（第{{ item.generation }}代）</li>
+                    <li>{{ member_link(item) }} <span>第{{ item.generation }}代</span></li>
                 {% endfor %}
             </ol>
         {% else %}
-            <p class="empty">两人之间没有可达亲缘或婚姻链路。</p>
+            <p class="empty">在深度 {{ result.max_depth }} 内没有找到可达亲缘或婚姻链路；已访问 {{ result.visited_count }} 个节点。</p>
         {% endif %}
     {% elif query_type == "family" %}
-        <h3>配偶</h3>
+        <p class="muted">目标成员：{{ member_link(result.member) }}</p>
+        <div class="result-columns">
+            <div>
+                <h3>父母</h3>
+                <ul class="plain-list">
+                    {% for item in result.parents %}
+                        <li>{{ "父亲" if item.relation_type == "father" else "母亲" }}：{{ member_link(item) }}</li>
+                    {% else %}
+                        <li>暂无父母。</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            <div>
+                <h3>配偶</h3>
+                <ul class="plain-list">
+                    {% for item in result.spouses %}
+                        <li>{{ member_link(item) }}（{{ item.married_year or "未知婚年" }}）</li>
+                    {% else %}
+                        <li>暂无配偶。</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            <div>
+                <h3>子女</h3>
+                <ul class="plain-list">
+                    {% for item in result.children %}
+                        <li>{{ member_link(item) }}（第{{ item.generation }}代）</li>
+                    {% else %}
+                        <li>暂无子女。</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    {% elif query_type == "descendants" %}
+        <p class="muted">根成员：{{ member_link(result.member) }}；按 DFS 展示前 {{ result.limit }} 人{% if result.truncated %}，结果已截断{% endif %}。</p>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>深度</th><th>ID</th><th>姓名</th><th>性别</th><th>生卒年</th><th>世代</th></tr></thead>
+                <tbody>
+                    {% for item in result.rows %}
+                        <tr><td>{{ item.depth }}</td><td>{{ item.id }}</td><td>{{ item.name|display_name }}</td><td>{{ {"M":"男","F":"女","U":"未知"}[item.gender] }}</td><td>{{ item.birth_year or "?" }} - {{ item.death_year or "" }}</td><td>{{ item.generation }}</td></tr>
+                    {% else %}
+                        <tr><td colspan="6">暂无后代。</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% elif query_type == "great_grandchildren" %}
+        <p class="muted">目标祖先：{{ member_link(result.member) }}</p>
         <ul class="plain-list">
-            {% for item in result.spouses %}
-                <li>#{{ item.id }} {{ item.name }}（{{ item.married_year or "未知婚年" }}）</li>
+            {% for item in result.rows %}
+                <li>{{ member_link(item) }}（第{{ item.generation }}代，{{ item.birth_year or "未知出生年" }}）</li>
             {% else %}
-                <li>暂无配偶。</li>
+                <li>没有找到三层以下的曾孙成员。</li>
             {% endfor %}
         </ul>
-        <h3>子女</h3>
-        <ul class="plain-list">
-            {% for item in result.children %}
-                <li>#{{ item.id }} {{ item.name }}（第{{ item.generation }}代）</li>
+    {% elif query_type == "generation_lifespan" %}
+        {% if result.best %}
+            <p>平均寿命最长：第 {{ result.best.generation }} 代，平均 {{ "%.1f"|format(result.best.avg_lifespan) }} 岁，样本 {{ result.best.member_count }} 人。</p>
+        {% endif %}
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>世代</th><th>人数</th><th>平均寿命</th></tr></thead>
+                <tbody>
+                    {% for item in result.rows %}
+                        <tr><td>{{ item.generation }}</td><td>{{ item.member_count }}</td><td>{{ "%.1f"|format(item.avg_lifespan) }}</td></tr>
+                    {% else %}
+                        <tr><td colspan="3">暂无可统计数据。</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% elif query_type == "unmarried_males" %}
+        <p class="muted">年龄大于 {{ result.age }} 岁且没有配偶的男性，最多显示 200 人。</p>
+        <ul class="plain-list compact-list">
+            {% for item in result.rows %}
+                <li>{{ member_link(item) }} · {{ item.birth_year or "未知出生年" }} · 第{{ item.generation }}代</li>
             {% else %}
-                <li>暂无子女。</li>
+                <li>没有符合条件的成员。</li>
             {% endfor %}
         </ul>
+    {% elif query_type == "early_birth" %}
+        <p class="muted">出生年份早于本世代平均出生年份的成员，最多显示 200 人。</p>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>ID</th><th>姓名</th><th>世代</th><th>出生年</th><th>本代平均出生年</th></tr></thead>
+                <tbody>
+                    {% for item in result %}
+                        <tr><td>{{ item.id }}</td><td>{{ item.name|display_name }}</td><td>{{ item.generation }}</td><td>{{ item.birth_year }}</td><td>{{ "%.1f"|format(item.avg_birth_year) }}</td></tr>
+                    {% else %}
+                        <tr><td colspan="5">暂无符合条件的成员。</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% elif query_type == "common_ancestor" %}
+        <p class="muted">成员 A：{{ member_link(result.member_a) }}；成员 B：{{ member_link(result.member_b) }}</p>
+        {% if result.ancestor %}
+            <p>最近共同祖先：{{ member_link(result.ancestor) }}；距 A {{ result.depth_a }} 代，距 B {{ result.depth_b }} 代。</p>
+        {% else %}
+            <p class="empty">没有找到共同祖先。</p>
+        {% endif %}
+    {% elif query_type == "generation_profile" %}
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>世代</th><th>人数</th><th>男</th><th>女</th><th>出生年范围</th></tr></thead>
+                <tbody>
+                    {% for item in result %}
+                        <tr><td>{{ item.generation }}</td><td>{{ item.member_count }}</td><td>{{ item.male_count }}</td><td>{{ item.female_count }}</td><td>{{ item.earliest_birth or "?" }} - {{ item.latest_birth or "?" }}</td></tr>
+                    {% else %}
+                        <tr><td colspan="5">暂无成员。</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     {% endif %}
 </section>
 {% endif %}

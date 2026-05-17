@@ -4,7 +4,10 @@ import csv
 import os
 import sqlite3
 from pathlib import Path
+from collections import defaultdict
 from typing import Any
+
+TREE_PREVIEW_LIMIT = 200
 
 from flask import (
     Flask,
@@ -135,28 +138,9 @@ def create_app() -> Flask:
     def genealogy_detail(genealogy_id: int):
         genealogy = require_genealogy_access(genealogy_id)
         keyword = request.args.get("q", "").strip()
-        if keyword:
-            members = query_all(
-                """
-                SELECT * FROM members
-                WHERE genealogy_id = ? AND name LIKE ?
-                ORDER BY generation, birth_year, id
-                LIMIT 200
-                """,
-                (genealogy_id, f"%{keyword}%"),
-            )
-        else:
-            members = query_all(
-                """
-                SELECT * FROM members
-                WHERE genealogy_id = ?
-                ORDER BY generation, birth_year, id
-                LIMIT 200
-                """,
-                (genealogy_id,),
-            )
+        members = search_members(genealogy_id, keyword)
         total = query_value("SELECT COUNT(*) FROM members WHERE genealogy_id = ?", (genealogy_id,))
-        tree = descendants_tree(genealogy_id, request.args.get("root_id", type=int))
+        tree, tree_truncated, tree_count = descendants_tree(genealogy_id, request.args.get("root_id", type=int))
         return render_template(
             "genealogy.html",
             genealogy=genealogy,
@@ -164,6 +148,9 @@ def create_app() -> Flask:
             keyword=keyword,
             total=total,
             tree=tree,
+            tree_truncated=tree_truncated,
+            tree_limit=TREE_PREVIEW_LIMIT,
+            tree_count=tree_count,
         )
 
     @app.route("/genealogies/<int:genealogy_id>/invite", methods=("POST",))
@@ -379,7 +366,7 @@ def create_app() -> Flask:
             flash("请提供 root_id。", "error")
             return redirect(url_for("genealogy_detail", genealogy_id=genealogy_id))
         require_member(genealogy_id, root_id)
-        rows = descendants_flat(root_id)
+        rows, _ = descendants_flat(root_id)
         exports_dir = BASE_DIR / "exports"
         exports_dir.mkdir(exist_ok=True)
         file_path = exports_dir / f"genealogy_{genealogy_id}_branch_{root_id}.csv"
@@ -421,6 +408,9 @@ def get_db() -> sqlite3.Connection:
         g.db = sqlite3.connect(current_app_database())
         g.db.row_factory = sqlite3.Row
         g.db.execute("PRAGMA foreign_keys = ON")
+        g.db.execute("PRAGMA busy_timeout = 5000")
+        g.db.execute("PRAGMA journal_mode = WAL")
+        g.db.execute("PRAGMA synchronous = NORMAL")
     return g.db
 
 
@@ -544,8 +534,51 @@ def query_value(sql: str, params: tuple[Any, ...] = ()) -> Any:
 
 def execute(sql: str, params: tuple[Any, ...] = ()) -> None:
     db = get_db()
-    db.execute(sql, params)
-    db.commit()
+    with db:
+        db.execute(sql, params)
+
+
+def search_members(genealogy_id: int, keyword: str) -> list[sqlite3.Row]:
+    if not keyword:
+        return query_all(
+            """
+            SELECT * FROM members
+            WHERE genealogy_id = ?
+            ORDER BY generation, birth_year, id
+            LIMIT 200
+            """,
+            (genealogy_id,),
+        )
+
+    has_fts = query_one(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'members_fts'"
+    )
+    if has_fts:
+        fts_query = " ".join(part.replace('"', '""') + "*" for part in keyword.split())
+        if fts_query:
+            rows = query_all(
+                """
+                SELECT m.*
+                FROM members_fts
+                JOIN members m ON m.id = members_fts.rowid
+                WHERE members_fts.name MATCH ? AND m.genealogy_id = ?
+                ORDER BY bm25(members_fts), m.generation, m.birth_year, m.id
+                LIMIT 200
+                """,
+                (fts_query, genealogy_id),
+            )
+            if rows:
+                return rows
+
+    return query_all(
+        """
+        SELECT * FROM members
+        WHERE genealogy_id = ? AND name LIKE ?
+        ORDER BY generation, birth_year, id
+        LIMIT 200
+        """,
+        (genealogy_id, f"%{keyword}%"),
+    )
 
 
 def accessible_genealogies() -> list[sqlite3.Row]:
@@ -648,42 +681,203 @@ def sync_child_generation(child_id: int) -> None:
         execute("UPDATE members SET generation = ? WHERE id = ?", (row["expected_generation"], child_id))
 
 
-def descendants_flat(root_id: int) -> list[sqlite3.Row]:
-    return query_all(
-        """
-        WITH RECURSIVE descendants(id, name, gender, birth_year, death_year, generation, depth) AS (
-            SELECT id, name, gender, birth_year, death_year, generation, 0
-            FROM members
-            WHERE id = ?
-            UNION ALL
-            SELECT c.id, c.name, c.gender, c.birth_year, c.death_year, c.generation, d.depth + 1
-            FROM descendants d
-            JOIN parent_child_relations r ON r.parent_id = d.id
-            JOIN members c ON c.id = r.child_id
-        )
-        SELECT DISTINCT * FROM descendants ORDER BY depth, birth_year, id
-        """,
+def descendants_flat(root_id: int, limit: int | None = None) -> tuple[list[dict[str, Any]], bool]:
+    """DFS 遍历后代，保持“祖先 -> 一个子树完整展开 -> 下一个子树”的族谱顺序。"""
+    root = query_one(
+        "SELECT id, genealogy_id FROM members WHERE id = ?",
         (root_id,),
     )
+    if root is None:
+        return [], False
+
+    genealogy_id = root["genealogy_id"]
+    edges = query_all(
+        """
+        SELECT r.parent_id, r.child_id
+        FROM parent_child_relations r
+        JOIN members p ON p.id = r.parent_id
+        WHERE p.genealogy_id = ?
+        """,
+        (genealogy_id,),
+    )
+    children_map: dict[int, list[int]] = defaultdict(list)
+    for edge in edges:
+        children_map[edge["parent_id"]].append(edge["child_id"])
+
+    members_by_id = {
+        row["id"]: row
+        for row in query_all(
+            """
+            SELECT id, name, gender, birth_year, death_year, generation
+            FROM members
+            WHERE genealogy_id = ?
+            """,
+            (genealogy_id,),
+        )
+    }
+
+    def members_birth_sort_key(member_id: int) -> int:
+        member = members_by_id.get(member_id)
+        return member["birth_year"] if member and member["birth_year"] is not None else 99999
+
+    for children in children_map.values():
+        children.sort(
+            key=lambda child_id: (
+                members_birth_sort_key(child_id),
+                child_id,
+            )
+        )
+
+    result: list[dict[str, Any]] = []
+    visited = {root_id}
+    truncated = False
+
+    def visit(member_id: int, depth: int) -> None:
+        nonlocal truncated
+        if truncated:
+            return
+        if limit is not None and len(result) >= limit:
+            truncated = True
+            return
+        member = members_by_id.get(member_id)
+        if member is None:
+            return
+        row = dict(member)
+        row["depth"] = depth
+        result.append(row)
+        for child_id in children_map.get(member_id, []):
+            if child_id in visited:
+                continue
+            visited.add(child_id)
+            visit(child_id, depth + 1)
+
+    visit(root_id, 0)
+    return result, truncated
 
 
-def descendants_tree(genealogy_id: int, root_id: int | None) -> list[dict[str, Any]]:
+def descendants_tree(genealogy_id: int, root_id: int | None) -> tuple[dict[str, Any] | None, bool, int]:
     if root_id is None:
         root = query_one(
             """
-            SELECT * FROM members
-            WHERE genealogy_id = ?
-              AND id NOT IN (SELECT child_id FROM parent_child_relations)
-            ORDER BY birth_year, id
+            SELECT m.*
+            FROM members m
+            LEFT JOIN parent_child_relations r ON r.child_id = m.id
+            WHERE m.genealogy_id = ? AND r.child_id IS NULL
+            ORDER BY m.birth_year, m.id
             LIMIT 1
             """,
             (genealogy_id,),
         )
         root_id = root["id"] if root else None
     if root_id is None:
-        return []
-    rows = descendants_flat(root_id)
-    return [{"member": row, "indent": row["depth"] * 24} for row in rows]
+        return None, False, 0
+
+    root = require_member(genealogy_id, root_id)
+    members = query_all(
+        """
+        SELECT id, name, gender, birth_year, death_year, generation
+        FROM members
+        WHERE genealogy_id = ?
+        """,
+        (genealogy_id,),
+    )
+    members_by_id = {row["id"]: row for row in members}
+    children_map: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for row in query_all(
+        """
+        SELECT r.parent_id, r.child_id, r.relation_type, c.birth_year, c.id
+        FROM parent_child_relations r
+        JOIN members p ON p.id = r.parent_id
+        JOIN members c ON c.id = r.child_id
+        WHERE p.genealogy_id = ?
+        ORDER BY c.birth_year, c.id
+        """,
+        (genealogy_id,),
+    ):
+        children_map[row["parent_id"]].append(dict(row))
+
+    spouses_map: dict[int, list[sqlite3.Row]] = defaultdict(list)
+    for row in query_all(
+        """
+        SELECT s.member1_id, s.member2_id, s.married_year, s.status
+        FROM marriages s
+        JOIN members m1 ON m1.id = s.member1_id
+        JOIN members m2 ON m2.id = s.member2_id
+        WHERE m1.genealogy_id = ? AND m2.genealogy_id = ?
+        ORDER BY s.married_year, s.id
+        """,
+        (genealogy_id, genealogy_id),
+    ):
+        left_id = row["member1_id"]
+        right_id = row["member2_id"]
+        left = members_by_id.get(left_id)
+        right = members_by_id.get(right_id)
+        if left and right:
+            spouses_map[left_id].append(
+                {
+                    "id": right["id"],
+                    "name": right["name"],
+                    "gender": right["gender"],
+                    "birth_year": right["birth_year"],
+                    "death_year": right["death_year"],
+                    "generation": right["generation"],
+                    "married_year": row["married_year"],
+                    "status": row["status"],
+                }
+            )
+            spouses_map[right_id].append(
+                {
+                    "id": left["id"],
+                    "name": left["name"],
+                    "gender": left["gender"],
+                    "birth_year": left["birth_year"],
+                    "death_year": left["death_year"],
+                    "generation": left["generation"],
+                    "married_year": row["married_year"],
+                    "status": row["status"],
+                }
+            )
+
+    visited = set()
+    count = 0
+    truncated = False
+
+    def build(member_id: int, depth: int, relation_type: str | None = None) -> dict[str, Any] | None:
+        nonlocal count, truncated
+        if truncated or member_id in visited:
+            return None
+        if count >= TREE_PREVIEW_LIMIT:
+            truncated = True
+            return None
+        member = members_by_id.get(member_id)
+        if member is None:
+            return None
+
+        visited.add(member_id)
+        count += 1
+        children = []
+        for edge in children_map.get(member_id, []):
+            child = build(edge["child_id"], depth + 1, edge["relation_type"])
+            if child is not None:
+                children.append(child)
+
+        return {
+            "member": member,
+            "spouses": spouses_map.get(member_id, []),
+            "children": children,
+            "depth": depth,
+            "relation_label": relation_label(relation_type),
+        }
+
+    return build(root["id"], 0), truncated, count
+
+
+def relation_label(relation_type: str | None) -> str:
+    if relation_type == "father":
+        return "父系子女"
+    if relation_type == "mother":
+        return "母系子女"
+    return "根节点"
 
 
 def ancestors(member_id: int) -> list[sqlite3.Row]:

@@ -1,5 +1,7 @@
 .venv/
 __pycache__/
+.codex/
+.agents/
 *.pyc
 *.db
 data/generated/

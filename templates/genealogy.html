@@ -1,6 +1,39 @@
 {% extends "base.html" %}
 {% block title %}{{ genealogy.name }} - 族谱管理系统{% endblock %}
 {% block content %}
+{% macro render_tree(node) %}
+    <li class="pedigree-item">
+        <article class="person-card">
+            <div class="person-main">
+                <a class="person-name" href="{{ url_for('member_detail', genealogy_id=genealogy.id, member_id=node.member.id) }}">
+                    #{{ node.member.id }} {{ node.member.name }}
+                </a>
+                <span class="person-meta">
+                    {{ {"M":"男","F":"女","U":"未知"}[node.member.gender] }} · 第 {{ node.member.generation }} 代 ·
+                    {{ node.member.birth_year or "?" }} - {{ node.member.death_year or "" }}
+                </span>
+            </div>
+            <span class="relation-badge">{{ node.relation_label }}</span>
+            {% if node.spouses %}
+                <div class="spouse-line" aria-label="配偶">
+                    <span class="spouse-label">配偶</span>
+                    {% for spouse in node.spouses %}
+                        <a class="spouse-chip" href="{{ url_for('member_detail', genealogy_id=genealogy.id, member_id=spouse.id) }}">
+                            #{{ spouse.id }} {{ spouse.name }}{% if spouse.married_year %} · {{ spouse.married_year }}{% endif %}
+                        </a>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        </article>
+        {% if node.children %}
+            <ul class="pedigree-children">
+                {% for child in node.children %}
+                    {{ render_tree(child) }}
+                {% endfor %}
+            </ul>
+        {% endif %}
+    </li>
+{% endmacro %}
 <section class="section-head">
     <div>
         <h1>{{ genealogy.name }}</h1>
@@ -64,26 +97,35 @@
         </div>
     </div>
     <div class="panel">
-        <h2>树形预览</h2>
+        <div class="panel-title-row">
+            <div>
+                <h2>树形预览</h2>
+                <p class="muted">按 DFS 顺序展开：每个成员的全部后代子树会连续显示，便于验收时观察真实亲缘分支。</p>
+            </div>
+            {% if tree %}
+                <a class="button secondary" href="{{ url_for('export_branch', genealogy_id=genealogy.id, root_id=tree.member.id) }}">导出当前分支 CSV</a>
+            {% endif %}
+        </div>
         <form method="get" class="inline-form">
+            {% if keyword %}<input type="hidden" name="q" value="{{ keyword }}">{% endif %}
             <input name="root_id" type="number" placeholder="根成员ID">
             <button type="submit">查看分支</button>
         </form>
-        <div class="tree">
-            {% for node in tree %}
-                <div class="tree-row" style="padding-left: {{ node.indent }}px">
-                    <a href="{{ url_for('member_detail', genealogy_id=genealogy.id, member_id=node.member.id) }}">
-                        #{{ node.member.id }} {{ node.member.name }}
-                    </a>
-                    <span>第 {{ node.member.generation }} 代</span>
-                </div>
+        {% if tree_truncated %}
+            <p class="empty">当前树形预览已显示前 {{ tree_limit }} 人。请输入更具体的根成员 ID 缩小范围，或使用「导出当前分支 CSV」获取完整 DFS 数据。</p>
+        {% endif %}
+        <div class="tree-summary">
+            当前渲染 {{ tree_count }} 人{% if tree %}，根节点 #{{ tree.member.id }} {{ tree.member.name }}{% endif %}
+        </div>
+        <div class="pedigree-scroll">
+            {% if tree %}
+                <ul class="pedigree-tree">
+                    {{ render_tree(tree) }}
+                </ul>
             {% else %}
                 <p class="empty">暂无可预览的成员。</p>
-            {% endfor %}
+            {% endif %}
         </div>
-        {% if tree %}
-            <a class="button secondary" href="{{ url_for('export_branch', genealogy_id=genealogy.id, root_id=tree[0].member.id) }}">导出当前分支 CSV</a>
-        {% endif %}
     </div>
 </section>
 {% endblock %}

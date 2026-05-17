@@ -88,16 +88,52 @@ CREATE INDEX IF NOT EXISTS idx_members_genealogy ON members(genealogy_id);
 CREATE INDEX IF NOT EXISTS idx_members_name ON members(name);
 CREATE INDEX IF NOT EXISTS idx_members_genealogy_name ON members(genealogy_id, name);
 CREATE INDEX IF NOT EXISTS idx_members_generation ON members(genealogy_id, generation);
+CREATE INDEX IF NOT EXISTS idx_members_genealogy_generation_birth ON members(genealogy_id, generation, birth_year, id);
+CREATE INDEX IF NOT EXISTS idx_members_life_stats ON members(genealogy_id, gender, birth_year, death_year);
 CREATE INDEX IF NOT EXISTS idx_parent_child_parent ON parent_child_relations(parent_id, child_id);
 CREATE INDEX IF NOT EXISTS idx_parent_child_child ON parent_child_relations(child_id, parent_id);
+CREATE INDEX IF NOT EXISTS idx_parent_child_child_type ON parent_child_relations(child_id, relation_type, parent_id);
 CREATE INDEX IF NOT EXISTS idx_marriages_member1 ON marriages(member1_id);
 CREATE INDEX IF NOT EXISTS idx_marriages_member2 ON marriages(member2_id);
+CREATE INDEX IF NOT EXISTS idx_marriages_pair_status ON marriages(member1_id, member2_id, status);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS members_fts
+USING fts5(name, biography, content='members', content_rowid='id', tokenize='unicode61');
+
+INSERT OR REPLACE INTO members_fts(rowid, name, biography)
+SELECT id, name, biography FROM members;
 
 CREATE TRIGGER IF NOT EXISTS trg_members_updated_at
 AFTER UPDATE ON members
 FOR EACH ROW
 BEGIN
     UPDATE members SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_members_fts_insert
+AFTER INSERT ON members
+FOR EACH ROW
+BEGIN
+    INSERT INTO members_fts(rowid, name, biography)
+    VALUES (NEW.id, NEW.name, NEW.biography);
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_members_fts_update
+AFTER UPDATE OF name, biography ON members
+FOR EACH ROW
+BEGIN
+    INSERT INTO members_fts(members_fts, rowid, name, biography)
+    VALUES('delete', OLD.id, OLD.name, OLD.biography);
+    INSERT INTO members_fts(rowid, name, biography)
+    VALUES (NEW.id, NEW.name, NEW.biography);
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_members_fts_delete
+AFTER DELETE ON members
+FOR EACH ROW
+BEGIN
+    INSERT INTO members_fts(members_fts, rowid, name, biography)
+    VALUES('delete', OLD.id, OLD.name, OLD.biography);
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_parent_child_same_genealogy
@@ -138,6 +174,57 @@ BEGIN
             WHEN NEW.relation_type = 'mother'
              AND (SELECT gender FROM members WHERE id = NEW.parent_id) NOT IN ('F', 'U')
             THEN RAISE(ABORT, 'mother relation requires a female or unknown-gender parent')
+        END;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_parent_child_no_cycle
+BEFORE INSERT ON parent_child_relations
+FOR EACH ROW
+BEGIN
+    SELECT
+        CASE
+            WHEN EXISTS (
+                WITH RECURSIVE descendants(id) AS (
+                    SELECT child_id
+                    FROM parent_child_relations
+                    WHERE parent_id = NEW.child_id
+                    UNION ALL
+                    SELECT r.child_id
+                    FROM parent_child_relations r
+                    JOIN descendants d ON d.id = r.parent_id
+                )
+                SELECT 1 FROM descendants WHERE id = NEW.parent_id
+            )
+            THEN RAISE(ABORT, 'parent-child relation would create a cycle')
+        END;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_member_birth_update_parent_age
+BEFORE UPDATE OF birth_year ON members
+FOR EACH ROW
+BEGIN
+    SELECT
+        CASE
+            WHEN NEW.birth_year IS NOT NULL
+             AND EXISTS (
+                SELECT 1
+                FROM parent_child_relations r
+                JOIN members c ON c.id = r.child_id
+                WHERE r.parent_id = NEW.id
+                  AND c.birth_year IS NOT NULL
+                  AND NEW.birth_year >= c.birth_year
+             )
+            THEN RAISE(ABORT, 'parent birth year must remain earlier than child birth year')
+            WHEN NEW.birth_year IS NOT NULL
+             AND EXISTS (
+                SELECT 1
+                FROM parent_child_relations r
+                JOIN members p ON p.id = r.parent_id
+                WHERE r.child_id = NEW.id
+                  AND p.birth_year IS NOT NULL
+                  AND p.birth_year >= NEW.birth_year
+             )
+            THEN RAISE(ABORT, 'child birth year must remain later than parent birth year')
         END;
 END;
 

@@ -32,5 +32,66 @@
         {% endwith %}
         {% block content %}{% endblock %}
     </main>
+    <script>
+        document.querySelectorAll('input[type="number"]').forEach((input) => {
+            if (input.closest('.number-stepper')) {
+                return;
+            }
+
+            const wrapper = document.createElement('span');
+            wrapper.className = 'number-stepper';
+            input.parentNode.insertBefore(wrapper, input);
+            wrapper.appendChild(input);
+
+            const controls = document.createElement('span');
+            controls.className = 'number-stepper-controls';
+
+            const decrease = document.createElement('button');
+            decrease.type = 'button';
+            decrease.className = 'number-stepper-button';
+            decrease.textContent = '▲';
+            decrease.setAttribute('aria-label', '减小');
+
+            const increase = document.createElement('button');
+            increase.type = 'button';
+            increase.className = 'number-stepper-button';
+            increase.textContent = '▼';
+            increase.setAttribute('aria-label', '增大');
+
+            controls.appendChild(decrease);
+            controls.appendChild(increase);
+            wrapper.appendChild(controls);
+
+            const stepValue = (direction) => {
+                if (document.activeElement !== input) {
+                    input.focus();
+                }
+
+                const step = input.step && input.step !== 'any' ? Number(input.step) : 1;
+                const min = input.min !== '' ? Number(input.min) : null;
+                const max = input.max !== '' ? Number(input.max) : null;
+                const fallback = min !== null ? min : 0;
+                const current = input.value === '' ? fallback : Number(input.value);
+                const next = current + direction * (Number.isFinite(step) && step > 0 ? step : 1);
+                const bounded = Math.min(max ?? next, Math.max(min ?? next, next));
+                input.value = String(bounded);
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+            };
+
+            decrease.addEventListener('click', () => stepValue(-1));
+            increase.addEventListener('click', () => stepValue(1));
+
+            input.addEventListener('keydown', (event) => {
+                if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    stepValue(1);
+                } else if (event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    stepValue(-1);
+                }
+            });
+        });
+    </script>
 </body>
 </html>

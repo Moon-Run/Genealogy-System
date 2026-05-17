@@ -173,6 +173,17 @@ label {
     font-size: 14px;
 }
 
+.check-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.check-row input {
+    width: auto;
+    min-height: auto;
+}
+
 input,
 select,
 textarea {

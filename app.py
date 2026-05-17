@@ -366,10 +366,12 @@ def create_app() -> Flask:
                         raise ValueError("请填写姓名")
                     result = {"name": name, "rows": lookup_members_by_name(genealogy_id, name)}
                 elif query_type == "kinship":
+                    include_marriage = request.form.get("include_marriage") == "1"
                     result = kinship_path(
                         genealogy_id,
                         form_member_id("member_a_id"),
                         form_member_id("member_b_id"),
+                        include_marriage=include_marriage,
                         max_depth=min(max(int(request.form.get("max_depth") or 20), 1), 30),
                     )
                 elif query_type == "family":
@@ -1175,12 +1177,26 @@ def closest_common_ancestor(genealogy_id: int, member_a_id: int, member_b_id: in
     }
 
 
-def kinship_path(genealogy_id: int, member_a_id: int, member_b_id: int, max_depth: int = 20) -> dict[str, Any] | None:
+def kinship_path(
+    genealogy_id: int,
+    member_a_id: int,
+    member_b_id: int,
+    include_marriage: bool = False,
+    max_depth: int = 20,
+) -> dict[str, Any] | None:
     require_member(genealogy_id, member_a_id)
     require_member(genealogy_id, member_b_id)
+    mode_label = "血缘关系" if not include_marriage else "血缘及婚姻关系"
     if member_a_id == member_b_id:
         member = require_member(genealogy_id, member_a_id)
-        return {"depth": 0, "labels": "同一成员", "members": [member], "visited_count": 1}
+        return {
+            "depth": 0,
+            "labels": "同一成员",
+            "members": [member],
+            "visited_count": 1,
+            "include_marriage": include_marriage,
+            "mode_label": mode_label,
+        }
 
     graph: dict[int, list[tuple[int, str]]] = defaultdict(list)
     for row in query_all(
@@ -1196,17 +1212,18 @@ def kinship_path(genealogy_id: int, member_a_id: int, member_b_id: int, max_dept
         up_label = "子女 -> 父亲" if row["relation_type"] == "father" else "子女 -> 母亲"
         graph[row["parent_id"]].append((row["child_id"], down_label))
         graph[row["child_id"]].append((row["parent_id"], up_label))
-    for row in query_all(
-        """
-        SELECT s.member1_id, s.member2_id
-        FROM marriages s
-        JOIN members m1 ON m1.id = s.member1_id
-        WHERE m1.genealogy_id = ?
-        """,
-        (genealogy_id,),
-    ):
-        graph[row["member1_id"]].append((row["member2_id"], "配偶"))
-        graph[row["member2_id"]].append((row["member1_id"], "配偶"))
+    if include_marriage:
+        for row in query_all(
+            """
+            SELECT s.member1_id, s.member2_id
+            FROM marriages s
+            JOIN members m1 ON m1.id = s.member1_id
+            WHERE m1.genealogy_id = ?
+            """,
+            (genealogy_id,),
+        ):
+            graph[row["member1_id"]].append((row["member2_id"], "配偶"))
+            graph[row["member2_id"]].append((row["member1_id"], "配偶"))
 
     queue = deque([(member_a_id, [member_a_id], [])])
     visited = {member_a_id}
@@ -1230,12 +1247,22 @@ def kinship_path(genealogy_id: int, member_a_id: int, member_b_id: int, max_dept
                     "labels": " -> ".join(next_labels),
                     "members": [by_id[item] for item in next_path],
                     "visited_count": len(visited),
+                    "include_marriage": include_marriage,
+                    "mode_label": mode_label,
                 }
             visited.add(next_id)
             queue.append((next_id, next_path, next_labels))
 
     if len(visited) > 0:
-        return {"depth": None, "labels": "", "members": [], "visited_count": len(visited), "max_depth": max_depth}
+        return {
+            "depth": None,
+            "labels": "",
+            "members": [],
+            "visited_count": len(visited),
+            "max_depth": max_depth,
+            "include_marriage": include_marriage,
+            "mode_label": mode_label,
+        }
     else:
         return None
 

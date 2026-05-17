@@ -41,12 +41,16 @@
         </form>
     </div>
     <div class="panel query-card">
-        <h2>亲缘链路</h2>
+        <h2>人物亲缘关系查询</h2>
         <form method="post" class="form">
             <input type="hidden" name="query_type" value="kinship">
             <label>成员 A ID<input name="member_a_id" type="number" min="1" required></label>
             <label>成员 B ID<input name="member_b_id" type="number" min="1" required></label>
             <label>最大搜索深度<input name="max_depth" type="number" min="1" max="30" value="20"></label>
+            <label class="check-row">
+                <input name="include_marriage" type="checkbox" value="1" {% if query_type == "kinship" and result and result.include_marriage %}checked{% endif %}>
+                包含婚姻关系
+            </label>
             <button type="submit">查询最短链路</button>
         </form>
     </div>
@@ -155,14 +159,14 @@
         </div>
     {% elif query_type == "kinship" %}
         {% if result.members %}
-            <p>最短链路长度：{{ result.depth }}；访问节点 {{ result.visited_count }} 个；关系方向：{{ result.labels }}</p>
+            <p>查询范围：{{ result.mode_label }}；最短链路长度：{{ result.depth }}；访问节点 {{ result.visited_count }} 个；关系方向：{{ result.labels }}</p>
             <ol class="path relation-path">
                 {% for item in result.members %}
                     <li>{{ member_link(item) }} <span>第{{ item.generation }}代</span></li>
                 {% endfor %}
             </ol>
         {% else %}
-            <p class="empty">在深度 {{ result.max_depth }} 内没有找到可达亲缘或婚姻链路；已访问 {{ result.visited_count }} 个节点。</p>
+            <p class="empty">查询范围：{{ result.mode_label }}；在深度 {{ result.max_depth }} 内没有找到可达通路；已访问 {{ result.visited_count }} 个节点。</p>
         {% endif %}
     {% elif query_type == "family" %}
         <p class="muted">目标成员：{{ member_link(result.member) }}</p>

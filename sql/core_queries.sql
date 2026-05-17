@@ -82,15 +82,11 @@ JOIN members great_grandchild ON great_grandchild.id = r3.child_id
 WHERE r1.parent_id = :ancestor_id
 ORDER BY great_grandchild.birth_year, great_grandchild.id;
 
--- 7. 两个成员之间的亲缘或婚姻链路，限制搜索深度为 20。
+-- 7. 两个成员之间的血缘亲缘链路，限制搜索深度为 20。
 WITH RECURSIVE graph(from_id, to_id, label) AS (
     SELECT parent_id, child_id, relation_type || '->child' FROM parent_child_relations
     UNION ALL
     SELECT child_id, parent_id, 'child->' || relation_type FROM parent_child_relations
-    UNION ALL
-    SELECT member1_id, member2_id, 'spouse' FROM marriages
-    UNION ALL
-    SELECT member2_id, member1_id, 'spouse' FROM marriages
 ),
 search(id, path, labels, depth) AS (
     SELECT :member_a_id, printf('%d', :member_a_id), '', 0

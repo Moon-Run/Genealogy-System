@@ -132,8 +132,8 @@ def write_members_and_relations(
                 for index in range(generation_size):
                     gender = "M" if index % 2 == 0 else "F"
                     name_pool = MALE_NAMES if gender == "M" else FEMALE_NAMES
-                    birth_year = 1850 + generation * 24 + random.randint(-3, 3)
-                    death_year = birth_year + random.randint(62, 88) if birth_year < 1945 else ""
+                    birth_year = 1280 + (generation - 1) * 24 + random.randint(-3, 3)
+                    death_year = birth_year + random.randint(62, 88) if birth_year <= 1935 else ""
                     name = f"{surname}{name_pool[index % len(name_pool)]}{generation}"
                     members.writerow([member_id, genealogy_id, name, gender, birth_year, death_year, generation, "模拟生成成员"])
                     current_generation.append(member_id)
@@ -152,7 +152,7 @@ def write_members_and_relations(
                         relations.writerow([mother_id, child_id, "mother"])
 
                 for left, right in zip(current_generation[0::2], current_generation[1::2]):
-                    marriages.writerow([marriage_id, left, right, 1870 + generation * 24, "", "active"])
+                    marriages.writerow([marriage_id, left, right, birth_year + 22, "", "active"])
                     marriage_id += 1
 
 

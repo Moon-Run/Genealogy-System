@@ -4,6 +4,19 @@
 {% macro member_link(item) -%}
     <a href="{{ url_for('member_detail', genealogy_id=genealogy.id, member_id=item.id) }}">#{{ item.id }} {{ item.name|display_name }}</a>
 {%- endmacro %}
+{% macro pager(result, query_type, extra={}) -%}
+    {% if result.total_pages > 1 %}
+        <div class="pagination result-pagination">
+            {% if result.has_prev %}
+                <a class="button secondary" href="{{ url_for('queries', genealogy_id=genealogy.id, query_type=query_type, result_page=result.page-1, **extra) }}">上一页</a>
+            {% endif %}
+            <span class="muted">第 {{ result.page }} / {{ result.total_pages }} 页，共 {{ result.total }} 条</span>
+            {% if result.has_next %}
+                <a class="button secondary" href="{{ url_for('queries', genealogy_id=genealogy.id, query_type=query_type, result_page=result.page+1, **extra) }}">下一页</a>
+            {% endif %}
+        </div>
+    {% endif %}
+{%- endmacro %}
 
 <div class="query-page">
 <section class="section-head query-head">
@@ -179,7 +192,7 @@
             {% endfor %}
         </div>
     {% elif query_type == "name_lookup" %}
-        <p class="muted">姓名关键词：{{ result.name }}；最多显示 200 条，用 ID 和世代区分重名成员。</p>
+        <p class="muted">姓名关键词：{{ result.name }}；每页 50 条，用 ID 和世代区分重名成员。</p>
         <div class="table-wrap">
             <table>
                 <thead><tr><th>ID</th><th>姓名</th><th>性别</th><th>世代</th><th>生卒年</th><th></th></tr></thead>
@@ -199,6 +212,7 @@
                 </tbody>
             </table>
         </div>
+        {{ pager(result, "name_lookup", {"name": result.name}) }}
     {% elif query_type == "kinship" %}
         {% if result.members %}
             <p>查询范围：{{ result.mode_label }}；最短链路长度：{{ result.depth }}；访问节点 {{ result.visited_count }} 个；关系方向：{{ result.labels }}</p>
@@ -271,6 +285,12 @@
         {% if result.best %}
             <p>平均寿命最长：第 {{ result.best.generation }} 代，平均 {{ "%.1f"|format(result.best.avg_lifespan) }} 岁，样本 {{ result.best.member_count }} 人。</p>
         {% endif %}
+        {% if result.quality and (result.quality.future_birth_count or result.quality.invalid_death_count) %}
+            <p class="empty">
+                数据质量提示：该族谱存在 {{ result.quality.future_birth_count or 0 }} 个出生年晚于当前年份的成员，
+                {{ result.quality.invalid_death_count or 0 }} 个卒年早于出生年的成员。统计时已排除这些无法计算有效寿命的记录。
+            </p>
+        {% endif %}
         <div class="table-wrap">
             <table>
                 <thead><tr><th>世代</th><th>人数</th><th>平均寿命</th></tr></thead>
@@ -284,7 +304,7 @@
             </table>
         </div>
     {% elif query_type == "unmarried_males" %}
-        <p class="muted">年龄大于 {{ result.age }} 岁且没有配偶的男性，最多显示 200 人。</p>
+        <p class="muted">年龄大于 {{ result.age }} 岁且没有配偶的男性，每页 50 人。</p>
         <ul class="plain-list compact-list">
             {% for item in result.rows %}
                 <li>{{ member_link(item) }} · {{ item.birth_year or "未知出生年" }} · 第{{ item.generation }}代</li>
@@ -292,13 +312,14 @@
                 <li>没有符合条件的成员。</li>
             {% endfor %}
         </ul>
+        {{ pager(result, "unmarried_males", {"age": result.age}) }}
     {% elif query_type == "early_birth" %}
-        <p class="muted">出生年份早于本世代平均出生年份的成员，最多显示 200 人。</p>
+        <p class="muted">出生年份早于本世代平均出生年份的成员，每页 50 人。</p>
         <div class="table-wrap">
             <table>
                 <thead><tr><th>ID</th><th>姓名</th><th>世代</th><th>出生年</th><th>本代平均出生年</th></tr></thead>
                 <tbody>
-                    {% for item in result %}
+                    {% for item in result.rows %}
                         <tr><td>{{ item.id }}</td><td>{{ item.name|display_name }}</td><td>{{ item.generation }}</td><td>{{ item.birth_year }}</td><td>{{ "%.1f"|format(item.avg_birth_year) }}</td></tr>
                     {% else %}
                         <tr><td colspan="5">暂无符合条件的成员。</td></tr>
@@ -306,6 +327,7 @@
                 </tbody>
             </table>
         </div>
+        {{ pager(result, "early_birth") }}
     {% elif query_type == "common_ancestor" %}
         <p class="muted">成员 A：{{ member_link(result.member_a) }}；成员 B：{{ member_link(result.member_b) }}</p>
         {% if result.ancestor %}

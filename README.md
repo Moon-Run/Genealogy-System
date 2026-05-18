@@ -74,6 +74,14 @@ python scripts/generate_data.py --out data/generated --large-size 50000 --total-
 
 导入方式见 [docs/import_export.md](docs/import_export.md)。
 
+生成并直接导入结构更规整的 52000 人洪氏族谱：
+
+```bash
+python3 scripts/generate_hong_genealogy.py --database genealogy.db --size 52000
+```
+
+该脚本会生成上代少、下代多、所有成员沿同一始祖树扩展的 30 代族谱，便于演示共同祖先、树形预览和亲缘链路查询。
+
 ## 实验材料
 
 - 数据库设计：[docs/database_design.md](docs/database_design.md)

@@ -361,8 +361,11 @@ def create_app() -> Flask:
             (genealogy_id,),
         )
         result = None
-        query_type = request.form.get("query_type", "ancestors")
-        if request.method == "POST":
+        params = request.form if request.method == "POST" else request.args
+        query_type = params.get("query_type", "ancestors")
+        result_page = max(1, int(params.get("result_page") or 1))
+        result_per_page = 50
+        if request.method == "POST" or request.args.get("query_type"):
             try:
                 if query_type == "ancestors":
                     member_id = form_member_id("member_id")
@@ -370,18 +373,18 @@ def create_app() -> Flask:
                     ancestor_rows, truncated = ancestors(member_id)
                     result = {"member": member, "ancestors": ancestor_rows, "truncated": truncated}
                 elif query_type == "name_lookup":
-                    name = request.form.get("name", "").strip()
+                    name = params.get("name", "").strip()
                     if not name:
                         raise ValueError("请填写姓名")
-                    result = {"name": name, "rows": lookup_members_by_name(genealogy_id, name)}
+                    result = lookup_members_by_name(genealogy_id, name, page=result_page, per_page=result_per_page)
                 elif query_type == "kinship":
-                    include_marriage = request.form.get("include_marriage") == "1"
+                    include_marriage = params.get("include_marriage") == "1"
                     result = kinship_path(
                         genealogy_id,
                         form_member_id("member_a_id"),
                         form_member_id("member_b_id"),
                         include_marriage=include_marriage,
-                        max_depth=min(max(int(request.form.get("max_depth") or 20), 1), 30),
+                        max_depth=min(max(int(params.get("max_depth") or 20), 1), 30),
                     )
                 elif query_type == "family":
                     member_id = form_member_id("member_id")
@@ -391,7 +394,7 @@ def create_app() -> Flask:
                 elif query_type == "descendants":
                     member_id = form_member_id("member_id")
                     member = require_member(genealogy_id, member_id)
-                    limit = min(max(int(request.form.get("limit") or 200), 1), 1000)
+                    limit = min(max(int(params.get("limit") or 200), 1), 1000)
                     rows, truncated = descendants_flat(member_id, limit=limit)
                     result = {"member": member, "rows": rows, "truncated": truncated, "limit": limit}
                 elif query_type == "great_grandchildren":
@@ -401,10 +404,10 @@ def create_app() -> Flask:
                 elif query_type == "generation_lifespan":
                     result = generation_lifespan_stats(genealogy_id)
                 elif query_type == "unmarried_males":
-                    age = min(max(int(request.form.get("age") or 50), 1), 150)
-                    result = {"age": age, "rows": unmarried_males(genealogy_id, age)}
+                    age = min(max(int(params.get("age") or 50), 1), 150)
+                    result = unmarried_males(genealogy_id, age, page=result_page, per_page=result_per_page)
                 elif query_type == "early_birth":
-                    result = early_birth_members(genealogy_id)
+                    result = early_birth_members(genealogy_id, page=result_page, per_page=result_per_page)
                 elif query_type == "common_ancestor":
                     result = closest_common_ancestor(
                         genealogy_id,
@@ -821,7 +824,7 @@ def to_int_or_none(value: str | None) -> int | None:
 
 # 从表单读取成员 ID。
 def form_member_id(field_name: str) -> int:
-    value = request.form.get(field_name, "").strip()
+    value = request.values.get(field_name, "").strip()
     if not value:
         raise ValueError("请填写成员 ID")
     return int(value)
@@ -871,9 +874,28 @@ def family_snapshot(member_id: int) -> dict[str, Any]:
     }
 
 
+def page_payload(rows: list[sqlite3.Row], total: int, page: int, per_page: int, **extra: Any) -> dict[str, Any]:
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    payload = {
+        "rows": rows,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": total_pages,
+        "has_prev": page > 1,
+        "has_next": page < total_pages,
+    }
+    payload.update(extra)
+    return payload
+
+
 # 按姓名查找成员。
-def lookup_members_by_name(genealogy_id: int, name: str) -> list[sqlite3.Row]:
-    return search_members(genealogy_id, name, limit=200, offset=0)
+def lookup_members_by_name(genealogy_id: int, name: str, page: int = 1, per_page: int = 50) -> dict[str, Any]:
+    total = count_members(genealogy_id, name)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(max(page, 1), total_pages)
+    rows = search_members(genealogy_id, name, limit=per_page, offset=(page - 1) * per_page)
+    return page_payload(rows, total, page, per_page, name=name)
 
 
 # 根据父母世代同步子女世代。
@@ -1175,22 +1197,66 @@ def generation_lifespan_stats(genealogy_id: int) -> dict[str, Any]:
         """
         SELECT generation,
                COUNT(*) AS member_count,
-               AVG(COALESCE(death_year, CAST(strftime('%Y', 'now') AS INTEGER)) - birth_year) AS avg_lifespan
+               AVG(
+                   CASE
+                       WHEN death_year IS NOT NULL AND death_year >= birth_year THEN death_year - birth_year
+                       WHEN death_year IS NULL AND birth_year <= CAST(strftime('%Y', 'now') AS INTEGER)
+                           THEN CAST(strftime('%Y', 'now') AS INTEGER) - birth_year
+                   END
+               ) AS avg_lifespan
         FROM members
         WHERE genealogy_id = ?
           AND birth_year IS NOT NULL
+          AND (
+              (death_year IS NOT NULL AND death_year >= birth_year)
+              OR (death_year IS NULL AND birth_year <= CAST(strftime('%Y', 'now') AS INTEGER))
+          )
         GROUP BY generation
         ORDER BY avg_lifespan DESC, generation
         LIMIT 20
         """,
         (genealogy_id,),
     )
-    return {"rows": rows, "best": rows[0] if rows else None}
+    quality = query_one(
+        """
+        SELECT
+            SUM(CASE WHEN birth_year > CAST(strftime('%Y', 'now') AS INTEGER) THEN 1 ELSE 0 END) AS future_birth_count,
+            SUM(CASE WHEN death_year IS NOT NULL AND birth_year IS NOT NULL AND death_year < birth_year THEN 1 ELSE 0 END) AS invalid_death_count,
+            MAX(birth_year) AS max_birth_year
+        FROM members
+        WHERE genealogy_id = ?
+        """,
+        (genealogy_id,),
+    )
+    return {"rows": rows, "best": rows[0] if rows else None, "quality": quality}
 
 
 # 查询超过指定年龄的未婚男性。
-def unmarried_males(genealogy_id: int, age: int) -> list[sqlite3.Row]:
-    return query_all(
+def count_unmarried_males(genealogy_id: int, age: int) -> int:
+    return int(query_value(
+        """
+        SELECT COUNT(*)
+        FROM members m
+        WHERE m.genealogy_id = ?
+          AND m.gender = 'M'
+          AND m.birth_year IS NOT NULL
+          AND CAST(strftime('%Y', 'now') AS INTEGER) - m.birth_year > ?
+          AND NOT EXISTS (
+              SELECT 1
+              FROM marriages s
+              WHERE s.member1_id = m.id OR s.member2_id = m.id
+          )
+        """,
+        (genealogy_id, age),
+    ) or 0)
+
+
+# 查询超过指定年龄的未婚男性。
+def unmarried_males(genealogy_id: int, age: int, page: int = 1, per_page: int = 50) -> dict[str, Any]:
+    total = count_unmarried_males(genealogy_id, age)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(max(page, 1), total_pages)
+    rows = query_all(
         """
         SELECT m.*
         FROM members m
@@ -1202,17 +1268,44 @@ def unmarried_males(genealogy_id: int, age: int) -> list[sqlite3.Row]:
               SELECT 1
               FROM marriages s
               WHERE s.member1_id = m.id OR s.member2_id = m.id
-          )
+        )
         ORDER BY m.birth_year, m.id
-        LIMIT 200
+        LIMIT ? OFFSET ?
         """,
-        (genealogy_id, age),
+        (genealogy_id, age, per_page, (page - 1) * per_page),
     )
+    return page_payload(rows, total, page, per_page, age=age)
+
+
+def count_early_birth_members(genealogy_id: int) -> int:
+    return int(query_value(
+        """
+        WITH generation_avg AS (
+            SELECT genealogy_id, generation, AVG(birth_year) AS avg_birth_year
+            FROM members
+            WHERE genealogy_id = ?
+              AND birth_year IS NOT NULL
+            GROUP BY genealogy_id, generation
+        )
+        SELECT COUNT(*)
+        FROM members m
+        JOIN generation_avg g
+          ON g.genealogy_id = m.genealogy_id
+         AND g.generation = m.generation
+        WHERE m.genealogy_id = ?
+          AND m.birth_year IS NOT NULL
+          AND m.birth_year < g.avg_birth_year
+        """,
+        (genealogy_id, genealogy_id),
+    ) or 0)
 
 
 # 查询早于本世代平均出生年份的成员。
-def early_birth_members(genealogy_id: int) -> list[sqlite3.Row]:
-    return query_all(
+def early_birth_members(genealogy_id: int, page: int = 1, per_page: int = 50) -> dict[str, Any]:
+    total = count_early_birth_members(genealogy_id)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(max(page, 1), total_pages)
+    rows = query_all(
         """
         WITH generation_avg AS (
             SELECT genealogy_id, generation, AVG(birth_year) AS avg_birth_year
@@ -1230,10 +1323,11 @@ def early_birth_members(genealogy_id: int) -> list[sqlite3.Row]:
           AND m.birth_year IS NOT NULL
           AND m.birth_year < g.avg_birth_year
         ORDER BY m.generation, m.birth_year, m.id
-        LIMIT 200
+        LIMIT ? OFFSET ?
         """,
-        (genealogy_id, genealogy_id),
+        (genealogy_id, genealogy_id, per_page, (page - 1) * per_page),
     )
+    return page_payload(rows, total, page, per_page)
 
 
 # 统计各世代成员分布。
@@ -1257,35 +1351,40 @@ def generation_profile(genealogy_id: int) -> list[sqlite3.Row]:
 
 
 # 查询成员所有祖先的最近代数。
-def ancestor_depths(member_id: int) -> dict[int, int]:
-    # 最近共同祖先需要每个祖先到目标成员的最短代数。
+def ancestor_depths(member_id: int, genealogy_id: int) -> dict[int, int]:
+    # 最近共同祖先需要每个祖先到目标成员的最短代数；用去重 BFS 避免双亲递归重复扩散。
     rows = query_all(
         """
-        WITH RECURSIVE up(id, depth) AS (
-            SELECT parent_id, 1
-            FROM parent_child_relations
-            WHERE child_id = ?
-            UNION ALL
-            SELECT r.parent_id, up.depth + 1
-            FROM up
-            JOIN parent_child_relations r ON r.child_id = up.id
-            WHERE up.depth < 40
-        )
-        SELECT id, MIN(depth) AS depth
-        FROM up
-        GROUP BY id
+        SELECT r.child_id, r.parent_id
+        FROM parent_child_relations r
+        JOIN members p ON p.id = r.parent_id
+        WHERE p.genealogy_id = ?
         """,
-        (member_id,),
+        (genealogy_id,),
     )
-    return {row["id"]: row["depth"] for row in rows}
+    parents_by_child: dict[int, list[int]] = defaultdict(list)
+    for row in rows:
+        parents_by_child[row["child_id"]].append(row["parent_id"])
+
+    depths = {member_id: 0}
+    queue = deque([member_id])
+    while queue:
+        child_id = queue.popleft()
+        next_depth = depths[child_id] + 1
+        for parent_id in parents_by_child.get(child_id, []):
+            if parent_id in depths:
+                continue
+            depths[parent_id] = next_depth
+            queue.append(parent_id)
+    return depths
 
 
 # 查找两个成员最近共同祖先。
 def closest_common_ancestor(genealogy_id: int, member_a_id: int, member_b_id: int) -> dict[str, Any]:
     member_a = require_member(genealogy_id, member_a_id)
     member_b = require_member(genealogy_id, member_b_id)
-    ancestors_a = ancestor_depths(member_a_id)
-    ancestors_b = ancestor_depths(member_b_id)
+    ancestors_a = ancestor_depths(member_a_id, genealogy_id)
+    ancestors_b = ancestor_depths(member_b_id, genealogy_id)
     common_ids = set(ancestors_a) & set(ancestors_b)
     if not common_ids:
         return {"member_a": member_a, "member_b": member_b, "ancestor": None}

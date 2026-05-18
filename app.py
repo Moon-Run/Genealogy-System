@@ -33,12 +33,15 @@ BASE_DIR = Path(__file__).resolve().parent
 DATABASE = BASE_DIR / "genealogy.db"
 
 
+# 格式化姓名，去掉演示数据中的世代数字。
 def display_name(name: str | None) -> str:
+    # 模拟数据姓名末尾带世代数字，页面展示时去掉。
     if not name:
         return ""
     return re.sub(r"\d+$", "", str(name))
 
 
+# 创建并配置 Flask 应用。
 def create_app() -> Flask:
     app = Flask(__name__)
     app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-genealogy-secret")
@@ -47,6 +50,7 @@ def create_app() -> Flask:
     register_cli(app)
 
     @app.before_request
+    # 每次请求前加载当前登录用户。
     def load_logged_in_user() -> None:
         user_id = session.get("user_id")
         g.user = None
@@ -54,17 +58,20 @@ def create_app() -> Flask:
             g.user = query_one("SELECT id, username FROM users WHERE id = ?", (user_id,))
 
     @app.teardown_appcontext
+    # 请求结束后关闭数据库连接。
     def close_db(_: BaseException | None = None) -> None:
         db = g.pop("db", None)
         if db is not None:
             db.close()
 
+    # 首页按登录状态跳转到仪表盘或登录页。
     @app.route("/")
     def index():
         if g.user:
             return redirect(url_for("dashboard"))
         return redirect(url_for("login"))
 
+    # 处理用户注册。
     @app.route("/register", methods=("GET", "POST"))
     def register():
         if request.method == "POST":
@@ -83,6 +90,7 @@ def create_app() -> Flask:
                 return redirect(url_for("login"))
         return render_template("auth.html", mode="register")
 
+    # 处理用户登录。
     @app.route("/login", methods=("GET", "POST"))
     def login():
         if request.method == "POST":
@@ -97,11 +105,13 @@ def create_app() -> Flask:
                 return redirect(url_for("dashboard"))
         return render_template("auth.html", mode="login")
 
+    # 退出登录并清空会话。
     @app.route("/logout")
     def logout():
         session.clear()
         return redirect(url_for("login"))
 
+    # 展示当前用户可访问的族谱概览。
     @app.route("/dashboard")
     @login_required
     def dashboard():
@@ -111,6 +121,7 @@ def create_app() -> Flask:
         stats = dashboard_stats(sort)
         return render_template("dashboard.html", stats=stats, sort=sort, is_admin=is_admin_user())
 
+    # 创建新的族谱。
     @app.route("/genealogies/create", methods=("POST",))
     @login_required
     def create_genealogy():
@@ -130,6 +141,7 @@ def create_app() -> Flask:
             flash("族谱已创建。", "success")
         return redirect(url_for("dashboard"))
 
+    # 展示族谱详情、成员列表和树形预览。
     @app.route("/genealogies/<int:genealogy_id>")
     @login_required
     def genealogy_detail(genealogy_id: int):
@@ -164,6 +176,7 @@ def create_app() -> Flask:
             tree_count=tree_count,
         )
 
+    # 邀请用户协作指定族谱。
     @app.route("/genealogies/<int:genealogy_id>/invite", methods=("POST",))
     @login_required
     def invite_user(genealogy_id: int):
@@ -185,6 +198,7 @@ def create_app() -> Flask:
             flash("邀请成功。", "success")
         return redirect(url_for("genealogy_detail", genealogy_id=genealogy_id))
 
+    # 为族谱新增成员。
     @app.route("/genealogies/<int:genealogy_id>/members/create", methods=("POST",))
     @login_required
     def create_member(genealogy_id: int):
@@ -209,6 +223,7 @@ def create_app() -> Flask:
         flash("成员已添加。", "success")
         return redirect(url_for("genealogy_detail", genealogy_id=genealogy_id))
 
+    # 查看或编辑成员详情。
     @app.route("/genealogies/<int:genealogy_id>/members/<int:member_id>", methods=("GET", "POST"))
     @login_required
     def member_detail(genealogy_id: int, member_id: int):
@@ -272,6 +287,7 @@ def create_app() -> Flask:
             all_members=all_members,
         )
 
+    # 删除指定成员。
     @app.route("/genealogies/<int:genealogy_id>/members/<int:member_id>/delete", methods=("POST",))
     @login_required
     def delete_member(genealogy_id: int, member_id: int):
@@ -280,6 +296,7 @@ def create_app() -> Flask:
         flash("成员已删除。", "success")
         return redirect(url_for("genealogy_detail", genealogy_id=genealogy_id))
 
+    # 添加父母子女关系。
     @app.route("/genealogies/<int:genealogy_id>/relations/parent", methods=("POST",))
     @login_required
     def add_parent_relation(genealogy_id: int):
@@ -303,6 +320,7 @@ def create_app() -> Flask:
             flash(f"关系添加失败：{exc}", "error")
         return redirect(url_for("member_detail", genealogy_id=genealogy_id, member_id=child_id))
 
+    # 添加婚姻关系。
     @app.route("/genealogies/<int:genealogy_id>/relations/marriage", methods=("POST",))
     @login_required
     def add_marriage(genealogy_id: int):
@@ -326,10 +344,12 @@ def create_app() -> Flask:
             flash(f"婚姻关系添加失败：{exc}", "error")
         return redirect(url_for("member_detail", genealogy_id=genealogy_id, member_id=member1_id))
 
+    # 执行族谱查询分析。
     @app.route("/genealogies/<int:genealogy_id>/queries", methods=("GET", "POST"))
     @login_required
     def queries(genealogy_id: int):
         genealogy = require_genealogy_access(genealogy_id)
+        # 大数据场景不渲染全量下拉框，只给少量示例 ID。
         query_samples = query_all(
             """
             SELECT id, name, generation, birth_year
@@ -403,6 +423,7 @@ def create_app() -> Flask:
             result=result,
         )
 
+    # 导出某个成员的后代分支 CSV。
     @app.route("/genealogies/<int:genealogy_id>/export")
     @login_required
     def export_branch(genealogy_id: int):
@@ -437,22 +458,27 @@ def create_app() -> Flask:
     return app
 
 
+# 注册 Flask 命令行工具。
 def register_cli(app: Flask) -> None:
     @app.cli.command("init-db")
+    # 初始化数据库命令。
     def init_db_command() -> None:
         init_db()
         print(f"数据库已初始化：{DATABASE}")
 
     @app.cli.command("seed-demo")
+    # 写入演示数据命令。
     def seed_demo_command() -> None:
         seed_demo()
         print("演示数据已写入。登录账号：admin / admin123")
 
 
+# 获取当前请求的数据库连接。
 def get_db() -> sqlite3.Connection:
     if "db" not in g:
         g.db = sqlite3.connect(current_app_database())
         g.db.row_factory = sqlite3.Row
+        # 每个连接都显式开启外键，并使用 WAL 改善本地演示并发。
         g.db.execute("PRAGMA foreign_keys = ON")
         g.db.execute("PRAGMA busy_timeout = 5000")
         g.db.execute("PRAGMA journal_mode = WAL")
@@ -460,10 +486,12 @@ def get_db() -> sqlite3.Connection:
     return g.db
 
 
+# 读取当前应用配置的数据库路径。
 def current_app_database() -> str:
     return current_app.config["DATABASE"]
 
 
+# 初始化数据库结构。
 def init_db() -> None:
     db = sqlite3.connect(str(DATABASE))
     db.execute("PRAGMA foreign_keys = ON")
@@ -472,11 +500,13 @@ def init_db() -> None:
     db.close()
 
 
+# 写入小规模演示数据。
 def seed_demo() -> None:
     db = sqlite3.connect(str(DATABASE))
     db.execute("PRAGMA foreign_keys = ON")
     db.executescript((BASE_DIR / "schema.sql").read_text(encoding="utf-8"))
     cur = db.cursor()
+    # 小型演示数据用于快速体验；十万级数据由 generate_data.py 生成。
     cur.execute(
         "INSERT OR IGNORE INTO users (username, password_hash) VALUES (?, ?)",
         ("admin", generate_password_hash("admin123")),
@@ -555,7 +585,9 @@ def seed_demo() -> None:
     db.close()
 
 
+# 登录校验装饰器。
 def login_required(view):
+    # 包装视图，未登录时跳转登录页。
     def wrapped_view(**kwargs):
         if g.user is None:
             return redirect(url_for("login"))
@@ -565,25 +597,31 @@ def login_required(view):
     return wrapped_view
 
 
+# 查询多行记录。
 def query_all(sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
     return get_db().execute(sql, params).fetchall()
 
 
+# 查询单行记录。
 def query_one(sql: str, params: tuple[Any, ...] = ()) -> sqlite3.Row | None:
     return get_db().execute(sql, params).fetchone()
 
 
+# 查询单个值。
 def query_value(sql: str, params: tuple[Any, ...] = ()) -> Any:
     row = get_db().execute(sql, params).fetchone()
     return row[0] if row else None
 
 
+# 执行写入类 SQL。
 def execute(sql: str, params: tuple[Any, ...] = ()) -> None:
     db = get_db()
+    # with db 会在异常时自动回滚，约束错误不会留下半写入数据。
     with db:
         db.execute(sql, params)
 
 
+# 统计族谱成员数量。
 def count_members(genealogy_id: int, keyword: str = "") -> int:
     if keyword:
         return int(
@@ -596,6 +634,7 @@ def count_members(genealogy_id: int, keyword: str = "") -> int:
     return int(query_value("SELECT COUNT(*) FROM members WHERE genealogy_id = ?", (genealogy_id,)) or 0)
 
 
+# 按姓名搜索族谱成员。
 def search_members(genealogy_id: int, keyword: str, limit: int = 200, offset: int = 0) -> list[sqlite3.Row]:
     if not keyword:
         return query_all(
@@ -628,6 +667,7 @@ def search_members(genealogy_id: int, keyword: str, limit: int = 200, offset: in
             if rows:
                 return rows
 
+    # FTS 不可用或无命中时回退到 LIKE，保证功能始终可用。
     return query_all(
         """
         SELECT * FROM members
@@ -639,12 +679,15 @@ def search_members(genealogy_id: int, keyword: str, limit: int = 200, offset: in
     )
 
 
+# 判断当前用户是否为管理员。
 def is_admin_user() -> bool:
     return bool(g.user and g.user["username"] == "admin")
 
 
+# 生成仪表盘族谱统计数据。
 def dashboard_stats(sort: str) -> list[dict[str, Any]]:
     order_by = DASHBOARD_SORTS.get(sort, DASHBOARD_SORTS["members_desc"])
+    # 一次聚合出人数和性别统计，避免每个族谱多次查询。
     rows = query_all(
         f"""
         SELECT
@@ -680,6 +723,7 @@ def dashboard_stats(sort: str) -> list[dict[str, Any]]:
     ]
 
 
+# 查询当前用户可访问的族谱。
 def accessible_genealogies() -> list[sqlite3.Row]:
     if is_admin_user():
         return query_all(
@@ -704,7 +748,9 @@ def accessible_genealogies() -> list[sqlite3.Row]:
     )
 
 
+# 校验并返回可访问的族谱。
 def require_genealogy_access(genealogy_id: int, owner_only: bool = False) -> sqlite3.Row:
+    # admin 用于验收大数据时查看全部族谱；普通用户按创建/协作权限过滤。
     if owner_only:
         genealogy = query_one(
             """
@@ -742,6 +788,7 @@ def require_genealogy_access(genealogy_id: int, owner_only: bool = False) -> sql
     return genealogy
 
 
+# 校验并返回指定成员。
 def require_member(genealogy_id: int, member_id: int) -> sqlite3.Row:
     member = query_one("SELECT * FROM members WHERE id = ? AND genealogy_id = ?", (member_id, genealogy_id))
     if member is None:
@@ -750,6 +797,7 @@ def require_member(genealogy_id: int, member_id: int) -> sqlite3.Row:
     return member
 
 
+# 解析成员表单数据。
 def member_form_data() -> dict[str, Any]:
     name = request.form["name"].strip()
     if not name:
@@ -764,12 +812,14 @@ def member_form_data() -> dict[str, Any]:
     }
 
 
+# 将表单字符串转为整数或空值。
 def to_int_or_none(value: str | None) -> int | None:
     if value is None or value.strip() == "":
         return None
     return int(value)
 
 
+# 从表单读取成员 ID。
 def form_member_id(field_name: str) -> int:
     value = request.form.get(field_name, "").strip()
     if not value:
@@ -777,6 +827,7 @@ def form_member_id(field_name: str) -> int:
     return int(value)
 
 
+# 查询成员的配偶列表。
 def spouses_for(member_id: int) -> list[sqlite3.Row]:
     return query_all(
         """
@@ -793,6 +844,7 @@ def spouses_for(member_id: int) -> list[sqlite3.Row]:
     )
 
 
+# 查询成员的家庭关系快照。
 def family_snapshot(member_id: int) -> dict[str, Any]:
     return {
         "parents": query_all(
@@ -819,11 +871,14 @@ def family_snapshot(member_id: int) -> dict[str, Any]:
     }
 
 
+# 按姓名查找成员。
 def lookup_members_by_name(genealogy_id: int, name: str) -> list[sqlite3.Row]:
     return search_members(genealogy_id, name, limit=200, offset=0)
 
 
+# 根据父母世代同步子女世代。
 def sync_child_generation(child_id: int) -> None:
+    # 亲子关系变更后，让子女世代跟随父母最大世代自动修正。
     row = query_one(
         """
         SELECT MAX(p.generation) + 1 AS expected_generation
@@ -837,6 +892,7 @@ def sync_child_generation(child_id: int) -> None:
         execute("UPDATE members SET generation = ? WHERE id = ?", (row["expected_generation"], child_id))
 
 
+# 扁平化查询成员后代。
 def descendants_flat(root_id: int, limit: int | None = None) -> tuple[list[dict[str, Any]], bool]:
     """DFS 遍历后代，保持“祖先 -> 一个子树完整展开 -> 下一个子树”的族谱顺序。"""
     root = query_one(
@@ -872,6 +928,7 @@ def descendants_flat(root_id: int, limit: int | None = None) -> tuple[list[dict[
         )
     }
 
+    # 生成成员出生年份排序键。
     def members_birth_sort_key(member_id: int) -> int:
         member = members_by_id.get(member_id)
         return member["birth_year"] if member and member["birth_year"] is not None else 99999
@@ -888,6 +945,7 @@ def descendants_flat(root_id: int, limit: int | None = None) -> tuple[list[dict[
     visited = {root_id}
     truncated = False
 
+    # 深度优先遍历后代。
     def visit(member_id: int, depth: int) -> None:
         nonlocal truncated
         if truncated:
@@ -911,6 +969,7 @@ def descendants_flat(root_id: int, limit: int | None = None) -> tuple[list[dict[
     return result, truncated
 
 
+# 构建后代树形结构。
 def descendants_tree(genealogy_id: int, root_id: int | None, limit: int = TREE_PREVIEW_LIMIT) -> tuple[dict[str, Any] | None, bool, int]:
     if root_id is None:
         root = query_one(
@@ -939,6 +998,7 @@ def descendants_tree(genealogy_id: int, root_id: int | None, limit: int = TREE_P
     )
     members_by_id = {row["id"]: row for row in members}
     children_map: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    # 先把边和成员读入内存，再递归组树，避免树上每个节点都查库。
     for row in query_all(
         """
         SELECT r.parent_id, r.child_id, r.relation_type, c.birth_year, c.id
@@ -998,6 +1058,7 @@ def descendants_tree(genealogy_id: int, root_id: int | None, limit: int = TREE_P
     count = 0
     truncated = False
 
+    # 递归构建树节点。
     def build(member_id: int, depth: int, relation_type: str | None = None) -> dict[str, Any] | None:
         nonlocal count, truncated
         if truncated or member_id in visited:
@@ -1028,6 +1089,7 @@ def descendants_tree(genealogy_id: int, root_id: int | None, limit: int = TREE_P
     return build(root["id"], 0), truncated, count
 
 
+# 转换亲子关系显示文本。
 def relation_label(relation_type: str | None) -> str:
     if relation_type == "father":
         return "父系子女"
@@ -1036,6 +1098,7 @@ def relation_label(relation_type: str | None) -> str:
     return "根节点"
 
 
+# 查询成员祖先列表。
 def ancestors(member_id: int, limit: int = 500) -> tuple[list[dict[str, Any]], bool]:
     member = query_one("SELECT id, genealogy_id FROM members WHERE id = ?", (member_id,))
     if member is None:
@@ -1056,6 +1119,7 @@ def ancestors(member_id: int, limit: int = 500) -> tuple[list[dict[str, Any]], b
     for edge in edges:
         parents_by_child[edge["child_id"]].append(edge)
 
+    # 向上 BFS 并用 visited 去重，避免父母双边路径重复扩散。
     result: list[dict[str, Any]] = []
     visited = {member_id}
     queue = deque([(member_id, 0)])
@@ -1088,6 +1152,7 @@ def ancestors(member_id: int, limit: int = 500) -> tuple[list[dict[str, Any]], b
     return result, truncated
 
 
+# 查询成员曾孙列表。
 def great_grandchildren(member_id: int) -> list[sqlite3.Row]:
     return query_all(
         """
@@ -1104,6 +1169,7 @@ def great_grandchildren(member_id: int) -> list[sqlite3.Row]:
     )
 
 
+# 统计各世代平均寿命。
 def generation_lifespan_stats(genealogy_id: int) -> dict[str, Any]:
     rows = query_all(
         """
@@ -1122,6 +1188,7 @@ def generation_lifespan_stats(genealogy_id: int) -> dict[str, Any]:
     return {"rows": rows, "best": rows[0] if rows else None}
 
 
+# 查询超过指定年龄的未婚男性。
 def unmarried_males(genealogy_id: int, age: int) -> list[sqlite3.Row]:
     return query_all(
         """
@@ -1143,6 +1210,7 @@ def unmarried_males(genealogy_id: int, age: int) -> list[sqlite3.Row]:
     )
 
 
+# 查询早于本世代平均出生年份的成员。
 def early_birth_members(genealogy_id: int) -> list[sqlite3.Row]:
     return query_all(
         """
@@ -1168,6 +1236,7 @@ def early_birth_members(genealogy_id: int) -> list[sqlite3.Row]:
     )
 
 
+# 统计各世代成员分布。
 def generation_profile(genealogy_id: int) -> list[sqlite3.Row]:
     return query_all(
         """
@@ -1187,7 +1256,9 @@ def generation_profile(genealogy_id: int) -> list[sqlite3.Row]:
     )
 
 
+# 查询成员所有祖先的最近代数。
 def ancestor_depths(member_id: int) -> dict[int, int]:
+    # 最近共同祖先需要每个祖先到目标成员的最短代数。
     rows = query_all(
         """
         WITH RECURSIVE up(id, depth) AS (
@@ -1209,6 +1280,7 @@ def ancestor_depths(member_id: int) -> dict[int, int]:
     return {row["id"]: row["depth"] for row in rows}
 
 
+# 查找两个成员最近共同祖先。
 def closest_common_ancestor(genealogy_id: int, member_a_id: int, member_b_id: int) -> dict[str, Any]:
     member_a = require_member(genealogy_id, member_a_id)
     member_b = require_member(genealogy_id, member_b_id)
@@ -1227,6 +1299,7 @@ def closest_common_ancestor(genealogy_id: int, member_a_id: int, member_b_id: in
     }
 
 
+# 查找两个成员之间的最短亲缘路径。
 def kinship_path(
     genealogy_id: int,
     member_a_id: int,
@@ -1248,6 +1321,7 @@ def kinship_path(
             "mode_label": mode_label,
         }
 
+    # 把亲子关系视作无向图；勾选时再把婚姻关系加入图。
     graph: dict[int, list[tuple[int, str]]] = defaultdict(list)
     for row in query_all(
         """
@@ -1277,6 +1351,7 @@ def kinship_path(
 
     queue = deque([(member_a_id, [member_a_id], [])])
     visited = {member_a_id}
+    # BFS 首次到达目标即为最短链路。
     while queue:
         current_id, path, labels = queue.popleft()
         if len(labels) >= max_depth:
